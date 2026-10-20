@@ -29,6 +29,7 @@ DEFAULT_CONFIG = {
         "target": 20000,
         "per_source_cap": 220,
         "per_atom": 2,
+        "max_per_answer": 2,     # how many questions may share one answer
         "cloze_every": 3,       # every Nth atom also yields a fill-in-the-blank item
         "answer_min": 40,
         "answer_max": 700,

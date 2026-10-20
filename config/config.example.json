@@ -35,6 +35,7 @@
     "target": 20000,
     "per_source_cap": 220,
     "per_atom": 2,
+    "max_per_answer": 2,
     "cloze_every": 3,
     "answer_min": 40,
     "answer_max": 700

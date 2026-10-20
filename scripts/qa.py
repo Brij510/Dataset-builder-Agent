@@ -317,7 +317,8 @@ def main():
         sys.exit(1)
 
     rows = []
-    seen_i, seen_a = set(), set()
+    seen_i, seen_a = set(), collections.Counter()
+    max_per_answer = cfg["qa"].get("max_per_answer", 2)
     per_source = collections.Counter()
     rot = collections.defaultdict(int)
     qcfg = cfg["qa"]
@@ -331,9 +332,14 @@ def main():
             for q, a, restate in build_for_atom(atom, atom["subject"], rot, qcfg):
                 ik = q.lower()[:150]
                 ak = md5(norm_key(a))
-                if ik in seen_i or ak in seen_a:
+                if ik in seen_i:
                     continue
-                seen_i.add(ik); seen_a.add(ak)
+                # the same answer may back a couple of different questions
+                # (different wording, same fact) but not many - beyond that it
+                # teaches the model to answer everything with one phrase
+                if seen_a[ak] >= max_per_answer:
+                    continue
+                seen_i.add(ik); seen_a[ak] += 1
                 rows.append({"instruction": q, "input": "", "output": a,
                              "subject": atom["subject"], "source": atom["source"],
                              "kind": "restate" if restate else atom["kind"],
