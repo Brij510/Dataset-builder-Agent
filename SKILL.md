@@ -18,6 +18,16 @@ Every stage is standalone, resumable and cached. Nothing is fabricated: each ans
 in text that was actually extracted from a source document, and every row keeps a `source` pointer
 back to the file it came from.
 
+## When not to use this
+
+- The source is **image-only scans** - run OCR (`ocrmypdf`) first, this pipeline
+  reads text layers only.
+- You need answers the source does not contain. This pipeline never invents
+  facts; if the corpus lacks an answer, the answer is not in the dataset.
+- The task is retrieval, not instruction tuning. For a RAG index, keep the
+  chunks and skip stages 3-5.
+- The corpus is a handful of files and a hand-written prompt fits better.
+
 ## Prerequisites
 
 - Python 3.9+
@@ -123,6 +133,7 @@ python scripts/qa.py --output ./dataset --target 20000 --per-source-cap 220
 - Optional LLM backend (`llm.enabled: true`) rewrites questions into natural exam phrasing
   while keeping answers verbatim from the source
 - Re-running merges with the existing `qa_all.jsonl`, so an LLM pass is never lost
+- `--kinds` and `--subjects` restrict generation to specific atom kinds or subjects
 
 ### 5. Assemble and split (leakage control)
 

@@ -144,8 +144,17 @@ def main():
 
     kept = {k: v for k, v in corpus.items() if len(v) >= args.min_chars}
     total = sum(len(v) for v in kept.values())
+    empty = [k for k, v in corpus.items() if len(v) < args.min_chars]
     print(f"[extract] done: {len(corpus)} parsed, {len(kept)} usable, "
           f"{total:,} chars, {time.time() - t0:.0f}s")
+    if empty:
+        print(f"[extract] {len(empty)} document(s) produced no usable text. "
+              f"They are most likely image-only scans - run OCR (ocrmypdf) on "
+              f"them first, or the pipeline will silently skip them:")
+        for k in empty[:10]:
+            print(f"[extract]   {k}")
+        if len(empty) > 10:
+            print(f"[extract]   ... and {len(empty) - 10} more")
     print(f"[extract] corpus -> {corpus_path}")
 
 
