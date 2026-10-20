@@ -12,12 +12,19 @@ Notes
 - 4-bit + RS-LoRA is supported by Unsloth and is stable on Turing (T4).
 """
 import os
+import sys
 
-from unsloth import FastLanguageModel
-from datasets import load_dataset
-from trl import SFTTrainer
-from transformers import TrainingArguments
-import torch
+try:
+    from unsloth import FastLanguageModel
+    from datasets import load_dataset
+    from trl import SFTTrainer
+    from transformers import TrainingArguments
+    import torch
+except ImportError as exc:
+    sys.exit(
+        "This template needs the training stack:\n"
+        "  pip install unsloth transformers datasets trl accelerate bitsandbytes\n"
+        f"Missing: {exc}")
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 TRAIN_FILE = os.environ.get("TRAIN_FILE", os.path.join(BASE, "train.jsonl"))

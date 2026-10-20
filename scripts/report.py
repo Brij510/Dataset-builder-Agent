@@ -158,7 +158,7 @@ def main():
                 echo += 1
         echo_pct = echo / max(scored, 1) * 100
         ok = echo_pct <= 15
-        checks.append((f"echo rows <= 15%", f"{echo_pct:.1f}%", ok))
+        checks.append(("echo rows <= 15%", f"{echo_pct:.1f}%", ok))
         score += ok
 
         total += 1
@@ -166,13 +166,13 @@ def main():
                         (" ".join((r.get("instruction") or "").split()[:2]).lower()
                          for r in train)})
         ok = openers >= 20 or len(train) < 500
-        checks.append((f"distinct question openers >= 20", str(openers), ok))
+        checks.append(("distinct question openers >= 20", str(openers), ok))
         score += ok
 
         total += 1
         ratio = len(train) / max(len(corpus), 1)
         ok = ratio >= 1.0
-        checks.append((f"rows per source document >= 1.0", f"{ratio:.2f}", ok))
+        checks.append(("rows per source document >= 1.0", f"{ratio:.2f}", ok))
         score += ok
 
     if train and ev:
@@ -186,13 +186,13 @@ def main():
             if s:
                 worst = max(worst, len(s & tr_sh) / len(s))
         ok = worst <= 0.10
-        checks.append((f"eval/train answer overlap <= 0.10", f"{worst:.3f}", ok))
+        checks.append(("eval/train answer overlap <= 0.10", f"{worst:.3f}", ok))
         score += ok
 
         total += 1
         ev_ratio = len(ev) / max(len(train) + len(ev), 1) * 100
         ok = 3.0 <= ev_ratio <= 15.0
-        checks.append((f"eval share between 3% and 15%", f"{ev_ratio:.1f}%", ok))
+        checks.append(("eval share between 3% and 15%", f"{ev_ratio:.1f}%", ok))
         score += ok
 
     A("| check | value | status |")
