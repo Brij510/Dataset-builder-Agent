@@ -301,6 +301,8 @@ def main():
     ap.add_argument("--per-source-cap", type=int)
     ap.add_argument("--llm", action="store_true", help="force LLM backend on")
     ap.add_argument("--llm-only", action="store_true", help="only LLM-generated rows")
+    ap.add_argument("--no-merge", dest="merge", action="store_false",
+                    help="overwrite qa_all.jsonl instead of merging with it")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -394,6 +396,17 @@ def main():
                     print(f"  llm {i}/{len(chunks)} | rows={len(rows)}", flush=True)
 
     out = os.path.join(args.output, "qa_all.jsonl")
+    if args.merge and os.path.exists(out):
+        # keep rows from an earlier pass (e.g. an LLM run) that are not
+        # regenerated now, so re-running the deterministic stage is safe
+        prior = read_jsonl(out)
+        have = {(r.get("instruction", "").lower()[:150], md5(norm_key(r.get("output", ""))))
+                for r in prior}
+        for r in prior:
+            k = (r.get("instruction", "").lower()[:150], md5(norm_key(r.get("output", ""))))
+            if k in have and r.get("origin") == "llm":
+                rows.append(r)
+        print(f"[qa] merged {len(prior)} previously generated rows")
     write_jsonl(out, rows)
     print(f"[qa] {len(rows)} QA pairs")
     print(f"[qa] by subject: {summarize_counts(rows)}")

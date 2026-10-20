@@ -52,20 +52,57 @@ DEFAULT_CONFIG = {
 }
 
 
+def _deep_merge(base, override):
+    """Merge override into base without dropping sibling keys."""
+    out = dict(base)
+    for k, v in (override or {}).items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
 def load_config(path, overrides=None):
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))
     if path and os.path.exists(path):
         with open(path, encoding="utf-8") as f:
-            user = json.load(f)
-        for k, v in user.items():
-            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
-                cfg[k].update(v)
-            else:
-                cfg[k] = v
-    for k, v in (overrides or {}).items():
-        if v is not None:
-            cfg[k] = v
+            try:
+                user = json.load(f)
+            except json.JSONDecodeError as e:
+                raise SystemExit(f"config file {path} is not valid JSON: {e}")
+        if not isinstance(user, dict):
+            raise SystemExit(f"config file {path} must contain a JSON object")
+        cfg = _deep_merge(cfg, user)
+    if overrides:
+        cfg = _deep_merge(cfg, overrides)
+    _validate_config(cfg, path)
     return cfg
+
+
+def _validate_config(cfg, path=""):
+    """Fail loudly on nonsense configuration instead of half-running."""
+    problems = []
+    for key in ("eval_frac", "max_overlap"):
+        v = cfg["split"].get(key)
+        if not isinstance(v, (int, float)):
+            problems.append(f"split.{key} must be a number, got {v!r}")
+        elif not 0 <= v <= 1:
+            problems.append(f"split.{key} must be between 0 and 1, got {v}")
+    if not isinstance(cfg["qa"].get("target"), int) or cfg["qa"]["target"] < 0:
+        problems.append(f"qa.target must be a non-negative integer, got {cfg['qa'].get('target')!r}")
+    for key in ("min_sentence", "max_sentence"):
+        if cfg["atoms"].get(key, 0) <= 0:
+            problems.append(f"atoms.{key} must be positive")
+    if cfg["atoms"].get("min_sentence", 0) > cfg["atoms"].get("max_sentence", 0):
+        problems.append("atoms.min_sentence must not exceed atoms.max_sentence")
+    if cfg["extract"].get("pages", 1) <= 0:
+        problems.append("extract.pages must be positive")
+    if cfg["split"].get("shingle_n", 5) < 2:
+        problems.append("split.shingle_n must be at least 2")
+    if problems:
+        msg = "invalid configuration" + (f" in {path}" if path else "") + ":\n  - " + "\n  - ".join(problems)
+        raise SystemExit(msg)
 
 
 # --------------------------------------------------------------------- text
@@ -85,6 +122,11 @@ ARTIFACT_PATTERNS = [
 
 
 def clean_text(text, extra_noise=()):
+    if not text:
+        return ""
+    text = text.replace("\ufeff", "")                          # strip UTF-8 BOM
+    text = text.replace("\r\n", "\n").replace("\r", "\n")      # normalise line endings
+    text = text.replace("\u00a0", " ")                         # non-breaking space
     for p in list(NOISE_PATTERNS) + list(extra_noise):
         text = re.sub(p, " ", text, flags=re.IGNORECASE | re.MULTILINE)
     text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)     # de-hyphenate across lines

@@ -98,6 +98,36 @@ def main():
         print("no input rows found - run qa.py first", file=sys.stderr)
         sys.exit(1)
 
+    # ---- drop near-duplicate source documents BEFORE content dedupe.
+    # If a textbook and its scan are both present, the content dedupe below
+    # would delete the duplicate rows and leave the document-level signal
+    # invisible, so this has to run first.
+    doc_text = {}
+    for r in raw:
+        doc_text.setdefault(r["source"], [])
+        doc_text[r["source"]].append(r["output"])
+    doc_sh = {src: set().union(*[shingles(t, n) for t in texts]) if texts else set()
+              for src, texts in doc_text.items()}
+    doc_list = sorted(doc_sh.items())
+    dup_of = {}
+    for i in range(len(doc_list)):
+        if doc_list[i][0] in dup_of:
+            continue
+        a = doc_sh[doc_list[i][0]]
+        for j in range(i + 1, len(doc_list)):
+            if doc_list[j][0] in dup_of:
+                continue
+            b = doc_sh[doc_list[j][0]]
+            if not a or not b:
+                continue
+            inter = len(a & b)
+            if inter / min(len(a), len(b)) > 0.60:
+                dup_of[doc_list[j][0]] = doc_list[i][0]
+    if dup_of:
+        print(f"[assemble] {len(dup_of)} near-duplicate documents detected; "
+              f"dropping their rows")
+        raw = [r for r in raw if r["source"] not in dup_of]
+
     # ---- dedupe, honouring origin priority
     raw.sort(key=lambda r: PRIORITY.get(r["origin"], 9))
     seen_i, seen_a, merged = set(), set(), []
@@ -110,43 +140,6 @@ def main():
         merged.append(r)
     print(f"[assemble] {len(raw)} input rows -> {len(merged)} unique")
     print(f"[assemble] by subject: {summarize_counts(merged)}")
-
-    # ---- drop near-duplicate source documents before splitting.
-    # A textbook and its scan produce identical content; if both survive, the
-    # document-holdout split cannot work and the eval set stops being honest.
-    doc_sh = {}
-    for r in merged:
-        doc_sh.setdefault(r["source"], set())
-    for r in merged:
-        doc_sh[r["source"]] |= shingles(r["output"], n)
-    doc_list = list(doc_sh.items())
-    dup_of = {}
-    for i in range(len(doc_list)):
-        if doc_list[i][0] in dup_of:
-            continue
-        for j in range(i + 1, len(doc_list)):
-            if doc_list[j][0] in dup_of:
-                continue
-            a, b = doc_sh[doc_list[i][0]], doc_sh[doc_list[j][0]]
-            if not a or not b:
-                continue
-            inter = len(a & b)
-            if inter / min(len(a), len(b)) > 0.80:
-                dup_of[doc_list[j][0]] = doc_list[i][0]
-    if dup_of:
-        print(f"[assemble] {len(dup_of)} near-duplicate documents detected; "
-              f"dropping their rows")
-        merged = [r for r in merged if r["source"] not in dup_of]
-        seen_i, seen_a = set(), set()
-        merged2 = []
-        for r in merged:
-            ik = r["instruction"].lower()[:150]
-            ak = md5(norm_key(r["output"]))
-            if ik in seen_i or ak in seen_a:
-                continue
-            seen_i.add(ik); seen_a.add(ak)
-            merged2.append(r)
-        merged = merged2
 
     # ---- pick held-out source documents for eval
     by_src = collections.defaultdict(list)

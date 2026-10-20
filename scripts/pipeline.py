@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Orchestrator - runs the whole pipeline end to end.
 
-  extract -> atoms -> qa -> assemble -> validate
+  extract -> dedupe -> atoms -> qa -> assemble -> validate
 
 Each stage is resumable; re-running skips work already cached.
 
@@ -41,28 +41,33 @@ def main():
     ap.add_argument("--subjects", default="")
     ap.add_argument("--llm", action="store_true")
     ap.add_argument("--skip-validate", action="store_true")
+    ap.add_argument("--skip-dedupe", action="store_true")
     args = ap.parse_args()
 
     os.makedirs(args.output, exist_ok=True)
     cfg_arg = ["--config", args.config] if args.config else []
 
-    run("1/5 extract", "extract.py",
+    run("1/6 extract", "extract.py",
         ["--input", args.input, "--output", args.output,
          "--pages", str(args.pages), "--workers", str(args.workers)] + cfg_arg)
 
-    run("2/5 atoms", "atoms.py",
+    if not args.skip_dedupe:
+        run("2/6 dedupe", "dedupe.py",
+            ["--output", args.output] + cfg_arg)
+
+    run("3/6 atoms", "atoms.py",
         ["--output", args.output] + cfg_arg +
         (["--subjects", args.subjects] if args.subjects else []))
 
-    run("3/5 qa", "qa.py",
+    run("4/6 qa", "qa.py",
         ["--output", args.output, "--target", str(args.target)] + cfg_arg +
         (["--llm"] if args.llm else []))
 
-    run("4/5 assemble", "assemble.py",
+    run("5/6 assemble", "assemble.py",
         ["--output", args.output, "--eval-frac", str(args.eval_frac)] + cfg_arg)
 
     if not args.skip_validate:
-        run("5/5 validate", "validate.py", ["--output", args.output] + cfg_arg)
+        run("6/6 validate", "validate.py", ["--output", args.output] + cfg_arg)
 
     print("\n[pipeline] complete")
     print(f"  {os.path.join(args.output, 'train.jsonl')}")

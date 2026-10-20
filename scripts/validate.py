@@ -47,7 +47,13 @@ def main():
             continue
         rows = read_jsonl(jp)
         for i, o in enumerate(rows, 1):
-            t = o.get("text", "")
+            if not isinstance(o, dict):
+                errors.append(f"{split} row {i}: not a JSON object")
+                continue
+            for required in ("text", "instruction", "output"):
+                if required not in o:
+                    errors.append(f"{split} row {i}: missing key '{required}'")
+            t = o.get("text", "") or ""
             if t.count("<|im_start|>") != 2 or t.count("<|im_end|>") != 2:
                 errors.append(f"{split} row {i}: broken ChatML markers")
             if "<|im_start|>user" not in t or "<|im_start|>assistant" not in t:
@@ -71,17 +77,18 @@ def main():
 
     if "train" in data and "eval" in data:
         tr, ev = data["train"], data["eval"]
-        tr_i = {r["instruction"].lower().strip() for r in tr}
-        shared = sum(1 for r in ev if r["instruction"].lower().strip() in tr_i)
+        tr_i = {(r.get("instruction") or "").lower().strip() for r in tr}
+        shared = sum(1 for r in ev
+                     if (r.get("instruction") or "").lower().strip() in tr_i)
         if shared:
             errors.append(f"eval instructions also present in train: {shared}")
 
         tr_sh = set()
         for r in tr:
-            tr_sh |= shingles(r["output"], n)
+            tr_sh |= shingles(r.get("output") or "", n)
         worst, bad = 0.0, 0
         for r in ev:
-            s = shingles(r["output"], n)
+            s = shingles(r.get("output") or "", n)
             if s:
                 ov = len(s & tr_sh) / len(s)
                 worst = max(worst, ov)
@@ -92,7 +99,7 @@ def main():
         if bad:
             errors.append(f"{bad} eval rows exceed the overlap limit")
 
-        prefixes = collections.Counter(" ".join(r["instruction"].split()[:2]).lower()
+        prefixes = collections.Counter(" ".join((r.get("instruction") or "").split()[:2]).lower()
                                        for r in tr)
         print(f"Distinct question openers: {len(prefixes)}")
         print("Top openers:", prefixes.most_common(8))
@@ -110,8 +117,8 @@ def main():
             if r.get("kind") == "restate":
                 restate += 1
                 continue
-            q = set(re.findall(r"[a-z]{4,}", r["instruction"].lower()))
-            a = set(re.findall(r"[a-z]{4,}", r["output"].lower()))
+            q = set(re.findall(r"[a-z]{4,}", (r.get("instruction") or "").lower()))
+            a = set(re.findall(r"[a-z]{4,}", (r.get("output") or "").lower()))
             if len(a) < 4:
                 continue
             scored += 1
@@ -128,8 +135,8 @@ def main():
                 warns.append(f"{pct:.0f}% of rows are echo rows - the model will "
                              f"learn to repeat the question, not answer it")
 
-        alen = [len(r["output"]) for r in tr]
-        qlen = [len(r["instruction"]) for r in tr]
+        alen = [len(r.get("output") or "") for r in tr]
+        qlen = [len(r.get("instruction") or "") for r in tr]
         print(f"Answer chars : min {min(alen)} median {int(statistics.median(alen))} max {max(alen)}")
         print(f"Question chars: min {min(qlen)} median {int(statistics.median(qlen))} max {max(qlen)}")
 
