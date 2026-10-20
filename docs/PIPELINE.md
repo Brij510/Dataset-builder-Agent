@@ -59,6 +59,21 @@ bullet artifacts and de-hyphenates words broken across lines.
 The `text` field is ChatML, which is what Qwen3 / Llama 3 / Mistral expect natively.
 The CSV twin has columns `instruction,input,output,subject`.
 
+## Text blocks
+
+`scripts/pdfcols.py` rebuilds each page's text blocks before the text is
+cleaned. Textbook sidebars (worked examples printed in a box beside the main
+paragraph) and two-column pages are kept intact instead of being spliced into
+each other. The block grouping is:
+
+- a new block starts when a line sits more than 14pt below the previous one
+  **and** starts more than 18% of the page width away from it
+- a page is treated as two-column when left and right blocks overlap in
+  height for more than half of the shorter column
+
+Furniture lines (bare page numbers, "Table 3.3", "Fig. 3.2", "EXERCISE 3.1")
+are dropped when they are short.
+
 ## Near-duplicate documents
 
 A textbook and its scan carry the same content under different paths. Two consequences:

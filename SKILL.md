@@ -62,6 +62,9 @@ python scripts/extract.py --input ./my_docs --output ./dataset --pages 4 --worke
 - Writes `corpus.json`: `{relative_path: cleaned_text}`
 - **Uses processes, not threads** - PDF parsing is GIL-bound, threads give no speedup
 - Caches per file and is **resumable**: rerun after adding files, only new ones are parsed
+- Reconstructs **text blocks** so boxed sidebars and two-column pages are not
+  spliced into each other (this is where a large share of lost content and
+  corrupted sentences come from)
 - Strips watermarks, page numbers, BOM, CRLF, de-hyphenates line breaks, drops noise-only lines
 - `--limit N` processes only the first N documents (quick trials)
 - A corrupt file is skipped, not fatal

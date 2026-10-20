@@ -136,6 +136,71 @@ def main():
         A(f"- eval share of total: **{len(ev)/max(len(train)+len(ev),1)*100:.1f}%**")
     A("")
 
+    # ---------------- quality scorecard ----------------
+    A("## Quality scorecard\n")
+    score = 0
+    total = 0
+    checks = []
+
+    if train:
+        total += 1
+        echo = 0
+        scored = 0
+        for r in train:
+            if r.get("kind") == "restate":
+                continue
+            q = set(re.findall(r"[a-z]{4,}", (r.get("instruction") or "").lower()))
+            a = set(re.findall(r"[a-z]{4,}", (r.get("output") or "").lower()))
+            if len(a) < 4:
+                continue
+            scored += 1
+            if len(a - q) / len(a) < 0.35:
+                echo += 1
+        echo_pct = echo / max(scored, 1) * 100
+        ok = echo_pct <= 15
+        checks.append((f"echo rows <= 15%", f"{echo_pct:.1f}%", ok))
+        score += ok
+
+        total += 1
+        openers = len({k for k in
+                        (" ".join((r.get("instruction") or "").split()[:2]).lower()
+                         for r in train)})
+        ok = openers >= 20 or len(train) < 500
+        checks.append((f"distinct question openers >= 20", str(openers), ok))
+        score += ok
+
+        total += 1
+        ratio = len(train) / max(len(corpus), 1)
+        ok = ratio >= 1.0
+        checks.append((f"rows per source document >= 1.0", f"{ratio:.2f}", ok))
+        score += ok
+
+    if train and ev:
+        total += 1
+        worst = 0.0
+        tr_sh = set()
+        for r in train:
+            tr_sh |= shingles(r.get("output") or "")
+        for r in ev:
+            s = shingles(r.get("output") or "")
+            if s:
+                worst = max(worst, len(s & tr_sh) / len(s))
+        ok = worst <= 0.10
+        checks.append((f"eval/train answer overlap <= 0.10", f"{worst:.3f}", ok))
+        score += ok
+
+        total += 1
+        ev_ratio = len(ev) / max(len(train) + len(ev), 1) * 100
+        ok = 3.0 <= ev_ratio <= 15.0
+        checks.append((f"eval share between 3% and 15%", f"{ev_ratio:.1f}%", ok))
+        score += ok
+
+    A("| check | value | status |")
+    A("|---|---|---|")
+    for name, val, ok in checks:
+        A(f"| {name} | {val} | {'PASS' if ok else 'FAIL'} |")
+    A(f"\n**Score: {score}/{total}**\n")
+
     report = "\n".join(L)
     print(report)
     if args.write:

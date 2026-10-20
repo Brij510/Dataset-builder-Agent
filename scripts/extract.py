@@ -15,9 +15,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import clean_text, load_config, read_json, write_json  # noqa: E402
+from pdfcols import extract_page_text  # noqa: E402
 
 
 def extract_pdf(path, pages):
+    """Extract text, keeping text blocks (boxed examples, columns) intact."""
     import pdfplumber
     out = []
     try:
@@ -26,9 +28,12 @@ def extract_pdf(path, pages):
                 if i >= pages:
                     break
                 try:
-                    t = page.extract_text() or ""
+                    t = extract_page_text(page)
                 except Exception:
-                    t = ""
+                    try:
+                        t = page.extract_text() or ""
+                    except Exception:
+                        t = ""
                 if t.strip():
                     out.append(t)
     except Exception:

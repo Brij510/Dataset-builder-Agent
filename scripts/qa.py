@@ -298,6 +298,8 @@ def main():
     ap.add_argument("--config")
     ap.add_argument("--target", type=int)
     ap.add_argument("--per-source-cap", type=int)
+    ap.add_argument("--kinds", default="",
+                    help="comma list of atom kinds to generate from (default: all)")
     ap.add_argument("--llm", action="store_true", help="force LLM backend on")
     ap.add_argument("--llm-only", action="store_true", help="only LLM-generated rows")
     ap.add_argument("--no-merge", dest="merge", action="store_false",
@@ -324,8 +326,12 @@ def main():
     rot = collections.defaultdict(int)
     qcfg = cfg["qa"]
 
+    only_kinds = {k.strip() for k in args.kinds.split(",") if k.strip()}
+
     if not args.llm_only:
         for atom in atoms:
+            if only_kinds and atom.get("kind") not in only_kinds:
+                continue
             if len(rows) >= qcfg["target"]:
                 break
             if per_source[atom["source"]] >= qcfg["per_source_cap"]:

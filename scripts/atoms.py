@@ -170,6 +170,12 @@ def main():
         print("corpus.json not found - run extract.py first", file=sys.stderr)
         sys.exit(1)
 
+    total_chars = sum(len(v or "") for v in corpus.values())
+    if total_chars > 200_000_000:
+        print(f"[atoms] WARNING: corpus holds {total_chars/1e6:.0f}M characters; "
+              f"it is fully in memory here. Split it into several corpora and run "
+              f"the pipeline per batch, then merge the train/eval files.", flush=True)
+
     a = cfg["atoms"]
     auto_detect = cfg.get("auto_subject", True)
     known = cfg.get("subjects") or None

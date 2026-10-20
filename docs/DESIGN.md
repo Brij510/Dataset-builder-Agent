@@ -33,6 +33,35 @@ extraction to a few minutes.
 `maxtasksperchild` and a sequential fallback matter in practice, because a
 worker that dies on a pathological PDF breaks the whole pool.
 
+## Text blocks are reconstructed before anything else
+
+Textbooks put worked examples in boxed sidebars beside the main paragraph.
+`page.extract_text()` reads the page in visual order and splices the two
+together:
+
+> 'of the pair of linear equations, i.e., the number of pants she purchased is 1'
+
+pdfplumber's `use_text_flow=True` and `layout=True` produce the same result -
+the interleaving is in the page's character ordering, not in the extraction
+mode.
+
+`scripts/pdfcols.py` reconstructs the page's *text blocks*: groups of lines
+that sit close together vertically and start at roughly the same x. Each block
+is emitted whole, so a sidebar stays in one piece. Genuine two-column pages
+are detected (left and right blocks at overlapping heights) and read column by
+column.
+
+Measured on a 66-document NCERT slice:
+
+| | candidate sentences | atoms | yield |
+|---|---|---|---|
+| `page.extract_text()` | 3,928 | 1,114 | 28.4% |
+| block-aware | 2,780 | 1,165 | **41.9%** |
+
+The block-aware version removes 1,148 spliced-garbage sentences and lifts the
+atom yield by half. The gain is not only yield: those spliced lines were
+*silently wrong* text that no filter could have repaired.
+
 ## Line unwrapping comes before sentence splitting
 
 PDF extraction emits one *visual* line per row. A single sentence is usually
