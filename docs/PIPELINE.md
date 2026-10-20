@@ -76,6 +76,23 @@ Tune the regexes in `scripts/atoms.py` for your domain. A medical corpus, for
 example, will benefit from a stronger `definition` pattern and a dedicated
 `contraindication`/`dosage` kind.
 
+## Line unwrapping and completeness
+
+PDF extraction emits one visual line per visual row, so a sentence is usually
+split across several lines. `common.unwrap()` re-joins them before sentence
+splitting. It treats short lines as headings, always starts a new unit at a
+bullet or numbered item, and joins a line to the previous one only when the
+previous line looks like a wrapped sentence (long enough, not ending in
+punctuation).
+
+`atoms.looks_complete()` then rejects fragments: a line that starts lowercase,
+ends on a dangling conjunction, has no verb, or has a comma density typical of
+a table row.
+
+Both are configurable. Set `atoms.require_complete: false` to trade quality for
+roughly 2-3x the row count, and `atoms.min_words` to 3-4 to keep short factual
+sentences.
+
 ## Question archetypes
 
 Each kind maps to a template list. Templates are picked round-robin so the

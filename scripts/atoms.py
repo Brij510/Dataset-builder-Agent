@@ -177,7 +177,7 @@ def main():
                          if len(s) > a["min_sentence"] * 2 else [s]):
                 if len(sent.split()) < a["min_words"]:
                     continue
-                if not looks_complete(sent):
+                if a.get("require_complete", True) and not looks_complete(sent):
                     continue
                 kind, concept, stmt = classify(sent, cfg)
                 atoms.append({"kind": kind, "concept": concept, "statement": stmt,

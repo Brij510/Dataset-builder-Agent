@@ -24,7 +24,8 @@
   "atoms": {
     "min_sentence": 30,
     "max_sentence": 400,
-    "min_words": 5
+    "min_words": 5,
+    "require_complete": true
   },
 
   "qa": {

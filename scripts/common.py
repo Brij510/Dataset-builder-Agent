@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
         "min_sentence": 30,     # characters
         "max_sentence": 400,
         "min_words": 5,
+        "require_complete": True,   # drop mid-sentence fragments (quality vs yield)
     },
     "qa": {
         "target": 20000,
