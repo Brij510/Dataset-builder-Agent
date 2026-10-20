@@ -129,6 +129,34 @@ safety net in `assemble.py` use Jaccard.
 Short documents are excluded from comparison entirely, since their shingle
 sets are too small to be meaningful.
 
+## Leakage is measured by distinctive content, not raw shingles
+
+A raw 5-gram overlap counts boilerplate as leakage. Two answers that both
+say "is a unit of measurement" share five grams, and a corpus full of
+textbook phrasing produces overlap numbers that look alarming while the
+actual content is different.
+
+The filter is therefore IDF-weighted: each shingle is weighted by how rare it
+is across the corpus, and only distinctive content can push the overlap over
+the limit. On a 66-document NCERT slice this moved the reported overlap from
+0.080 (raw) to 0.041 (weighted) - the difference was boilerplate, not
+leakage.
+
+## The eval set is subject-stratified
+
+Holding out documents at random can leave the eval set dominated by whichever
+subject happens to have small documents, which makes the score meaningless.
+Each subject now gets a quota proportional to its share of the rows, and
+whole documents are taken until the quota is met. Smallest-fitting documents
+are preferred so a single large document cannot dominate.
+
+Two safeguards fall out of the document-holdout semantics:
+
+- a held-out document joins the eval set **whole** - truncating it would drop
+  the leftover rows, since the whole document is excluded from train
+- if a subject's only document would be held out, it is handed back, so no
+  subject disappears from training
+
 ## The split is document-level, then shingle-filtered
 
 Holding out whole *documents* is the strongest available guarantee that the

@@ -199,6 +199,56 @@ class MaxPerAnswer(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class StratifiedEval(unittest.TestCase):
+    """The eval set must cover every subject, and no subject may vanish from train."""
+
+    def _rows(self, source, subject, i):
+        # every row gets its own wording, so the leak filter has nothing to
+        # conflate and the test measures the split, not near-duplication
+        seed = hash((source, subject, i)) % 997
+        flavour = ["measured", "derived", "observed", "recorded", "defined",
+                   "compared", "summarised", "explained", "traced", "outlined",
+                   "expanded", "reviewed"][seed % 12]
+        thing = f"idea{seed % 89} aspect{seed % 31} topic{seed % 53}"
+        instr = f"Question {i} on {flavour} {thing} in {subject} from {source}"
+        out = (f"In {subject}, {flavour} {thing} is presented as a point that "
+               f"carries its own meaning within {source}, and it is treated as "
+               f"worth noting because it connects to {flavour} {thing} elsewhere "
+               f"in the section.")
+        return {"text": f"<|im_start|>user\n{instr}\n<|im_end|>\n"
+                       f"<|im_start|>assistant\n{out}<|im_end|>",
+                "subject": subject, "instruction": instr, "input": "", "output": out,
+                "source": source, "origin": "atoms", "kind": "fact"}
+
+    def test_every_subject_appears_in_eval_and_stays_in_train(self):
+        tmp = tempfile.mkdtemp(prefix="dsb_strat_")
+        try:
+            out = os.path.join(tmp, "out")
+            os.makedirs(out, exist_ok=True)
+            rows = []
+            for subject in ("Math", "Science", "History"):
+                for d in range(4):
+                    for i in range(12):
+                        rows.append(self._rows(f"{subject}/doc{d}.txt", subject, i))
+            write(os.path.join(out, "qa_all.jsonl"),
+                  "".join(json.dumps(r) + "\n" for r in rows))
+            run("assemble.py", "--output", out, "--eval-frac", "0.1")
+            ev = [json.loads(l) for l in
+                  open(os.path.join(out, "eval.jsonl"), encoding="utf-8") if l.strip()]
+            tr = [json.loads(l) for l in
+                  open(os.path.join(out, "train.jsonl"), encoding="utf-8") if l.strip()]
+            self.assertTrue(ev, "eval set is empty")
+            self.assertTrue(tr, "train set is empty")
+            ev_s = {r["subject"] for r in ev}
+            tr_s = {r["subject"] for r in tr}
+            self.assertEqual(ev_s, {"Math", "Science", "History"},
+                             f"eval missed a subject: {ev_s}")
+            self.assertEqual(tr_s, {"Math", "Science", "History"},
+                             f"a subject vanished from train: {tr_s}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class Determinism(unittest.TestCase):
     """Two runs over the same input must produce the same dataset."""
 

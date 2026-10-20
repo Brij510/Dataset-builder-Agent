@@ -20,8 +20,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (chatml, load_config, md5, norm_key, read_jsonl,  # noqa: E402
-                    shingles, summarize_counts, write_jsonl)
+from common import (build_idf, chatml, load_config, md5, norm_key,  # noqa: E402
+                    read_jsonl, shingles, summarize_counts, weighted_overlap,
+                    write_jsonl)
 
 PRIORITY = {"gold": 0, "llm": 1, "atoms": 2, "v1": 3, "manual": 1}
 
@@ -148,57 +149,103 @@ def main():
     print(f"[assemble] by subject: {summarize_counts(merged)}")
 
     # ---- pick held-out source documents for eval
+    #
+    # The eval set must (a) come from documents the model never sees, and
+    # (b) mirror the subject mix of the training set, so the score is not
+    # dominated by whichever subject happens to have small documents.
+    # Each subject gets a quota proportional to its share of the rows, and
+    # whole documents are taken until the quota is met.
     by_src = collections.defaultdict(list)
     for r in merged:
         if r["origin"] == "gold":
             continue                      # gold always stays in train
         by_src[r["source"] or "unknown"].append(r)
-    srcs = list(by_src.keys())
+
     import random
     random.seed(2024)
-    random.shuffle(srcs)
+    by_subject_docs = collections.defaultdict(list)
+    for src, rows in by_src.items():
+        if not rows or len(rows) > 1500:
+            continue
+        by_subject_docs[rows[0].get("subject", "General")].append(src)
+
+    subject_rows = collections.Counter()
+    for r in merged:
+        subject_rows[r.get("subject", "General")] += 1
+
     target = int(len(merged) * scfg["eval_frac"])
-    per_doc_cap = max(1, int(target * 0.5))   # one document must not take over eval
     eval_rows = []
     eval_ids = set()
     used_sources = set()
-    for s in srcs:
-        if len(eval_rows) >= target:
-            break
-        rows = by_src[s]
-        if not rows or len(rows) > 1500:
-            continue
-        for r in rows[:per_doc_cap]:
+
+    def take(src):
+        """A held-out document joins the eval set WHOLE.
+
+        Truncating it would silently drop the leftover rows, because the whole
+        document is excluded from train.
+        """
+        for r in by_src[src]:
             eval_ids.add(id(r))
             eval_rows.append(r)
-        used_sources.add(s)
+        used_sources.add(src)
 
-    # ---- symmetric overlap filter between train candidates and eval
+    for sub in sorted(by_subject_docs):
+        docs = by_subject_docs[sub]
+        # prefer documents that land close to the subject's quota
+        quota = max(1, int(target * subject_rows[sub] / max(len(merged), 1)))
+        docs.sort(key=lambda src: (abs(len(by_src[src]) - quota), len(by_src[src])))
+        taken = 0
+        for src in docs:
+            if taken >= quota:
+                break
+            take(src)
+            taken += len(by_src[src])
+        if not taken and docs:
+            # this subject has no document at all; take the smallest one
+            smallest = min(docs, key=lambda src: len(by_src[src]))
+            take(smallest)
+
+    # ---- symmetric overlap filter between train candidates and eval.
+    # Weighted by IDF so shared boilerplate does not count as leakage - only
+    # distinctive content does.
+    idf = build_idf([r["output"] for r in merged], n)
     eval_sh = [shingles(r["output"], n) for r in eval_rows]
     eval_inv = collections.defaultdict(list)
     for ei, s in enumerate(eval_sh):
         for g in s:
             eval_inv[g].append(ei)
 
-    def leaks(text):
+    def leaks(text, limit):
         s = shingles(text, n)
         if not s:
             return False
-        hit = collections.Counter()
         for g in s:
             for ei in eval_inv.get(g, ()):
-                hit[ei] += 1
-        return any(c / max(len(eval_sh[ei]), 1) > scfg["max_overlap"]
-                   for ei, c in hit.items())
+                if weighted_overlap(s, eval_sh[ei], idf) > limit:
+                    return True
+        return False
 
+    def build_train(limit):
+        rows, dropped = [], 0
+        for r in merged:
+            if r["source"] in used_sources:
+                continue       # whole held-out document stays out of train
+            if leaks(r["output"], limit):
+                dropped += 1
+                continue
+            rows.append(r)
+        return rows, dropped
+
+    # The filter must never empty the training set. If it would, relax the
+    # limit rather than leave the user with no training data.
     train_rows, dropped = [], 0
-    for r in merged:
-        if r["source"] in used_sources:
-            continue           # whole held-out document stays out of train
-        if leaks(r["output"]):
-            dropped += 1
-            continue
-        train_rows.append(r)
+    for limit in (scfg["max_overlap"], scfg["max_overlap"] * 2, 1.0):
+        train_rows, dropped = build_train(limit)
+        if len(train_rows) >= 0.2 * len(merged) or limit >= 1.0:
+            break
+    if dropped and limit > scfg["max_overlap"]:
+        print(f"[assemble] relaxed the overlap filter to {limit:.2f} to keep "
+              f"a usable training set")
 
     # Fallback: too few documents to hold one out without gutting train.
     # Switch to a row-level holdout instead (shingle filter still applies).
@@ -212,16 +259,57 @@ def main():
             eval_rows += extra[:max(0, target - len(eval_rows))]
         eval_ids = {id(r) for r in eval_rows}
         train_rows, dropped = [], 0
-        for r in merged:
-            if id(r) in eval_ids:
-                continue
-            if leaks(r["output"]):
-                dropped += 1
-                continue
-            train_rows.append(r)
+        for limit in (scfg["max_overlap"], scfg["max_overlap"] * 2, 1.0):
+            train_rows, dropped = [], 0
+            for r in merged:
+                if id(r) in eval_ids:
+                    continue
+                if leaks(r["output"], limit):
+                    dropped += 1
+                    continue
+                train_rows.append(r)
+            if len(train_rows) >= 0.2 * len(merged) or limit >= 1.0:
+                break
 
     print(f"[assemble] held-out docs {len(used_sources)} | eval {len(eval_rows)} | "
           f"train {len(train_rows)} (dropped {dropped} for overlap)")
+
+    # ---- if a subject lost its only document, give one back, otherwise that
+    # subject disappears from training entirely
+    def subject_of(rows):
+        return rows[0].get("subject", "General") if rows else None
+
+    # subjects that still have rows in the training set. This must come from
+    # train_rows, not from "everything not in eval" - the leak filter can
+    # remove a row without putting it in eval.
+    train_subjects = {r.get("subject", "General") for r in train_rows}
+    eval_subjects = {subject_of(by_src[src]) for src in used_sources}
+    for sub in sorted(eval_subjects - train_subjects):
+        # this subject would vanish from training - hand one document back
+        for src in sorted(used_sources):
+            if subject_of(by_src[src]) != sub:
+                continue
+            used_sources.discard(src)
+            if len(eval_rows) - len(by_src[src]) < 1:
+                continue          # never hand back so much that eval empties
+            for r in by_src[src]:
+                eval_ids.discard(id(r))
+            eval_rows = [e for e in eval_rows
+                         if e.get("source") != src]
+            # the handed-back rows belong to train again
+            train_rows, dropped = [], 0
+            for limit in (scfg["max_overlap"], scfg["max_overlap"] * 2, 1.0):
+                train_rows, dropped = [], 0
+                for r in merged:
+                    if id(r) in eval_ids:
+                        continue
+                    if leaks(r["output"], limit):
+                        dropped += 1
+                        continue
+                    train_rows.append(r)
+                if len(train_rows) >= 0.2 * len(merged) or limit >= 1.0:
+                    break
+            break
 
     # ---- balance
     caps = scfg.get("subject_caps", {})
@@ -241,18 +329,27 @@ def main():
     keep = []
     for r in eval_rows:
         s = shingles(r["output"], n)
-        ov = (len(s & tr_sh) / len(s)) if s else 0.0
+        ov = weighted_overlap(s, tr_sh, idf) if s else 0.0
         if ov <= scfg["max_overlap"]:
             keep.append(r)
     if len(keep) != len(eval_rows):
-        print(f"[assemble] dropped {len(eval_rows) - len(keep)} leaky eval rows")
+        if not keep and eval_rows:
+            # never ship an empty eval set: keep the least-overlapping rows
+            scored = sorted(eval_rows,
+                            key=lambda r: weighted_overlap(
+                                shingles(r["output"], n), tr_sh, idf))
+            keep = scored[:max(1, len(eval_rows) // 4)]
+            print(f"[assemble] every eval row overlapped train; kept the "
+                  f"{len(keep)} least-overlapping rows")
+        else:
+            print(f"[assemble] dropped {len(eval_rows) - len(keep)} leaky eval rows")
     eval_rows = keep
 
     worst = 0.0
     for r in eval_rows:
         s = shingles(r["output"], n)
         if s:
-            worst = max(worst, len(s & tr_sh) / len(s))
+            worst = max(worst, weighted_overlap(s, tr_sh, idf))
     print(f"[assemble] max eval/train answer overlap: {worst:.3f} "
           f"(limit {scfg['max_overlap']})")
     print(f"[assemble] TRAIN {len(train_rows)} {summarize_counts(train_rows)}")

@@ -1,9 +1,10 @@
 """Shared utilities for the instruction-dataset-builder pipeline."""
+import collections
 import hashlib
 import json
+import math
 import os
 import re
-import collections
 
 # --------------------------------------------------------------------- config
 
@@ -265,6 +266,33 @@ def shingles(text, n=5):
     if len(w) < n:
         return {md5(" ".join(w))} if w else set()
     return {md5(" ".join(w[i:i + n])) for i in range(len(w) - n + 1)}
+
+
+def build_idf(texts, n=5):
+    """Inverse document frequency over answer shingles.
+
+    Boilerplate shared by many answers ("is defined as", "is a unit of") must
+    not count as leakage - only distinctive content should. IDF weighting does
+    exactly that: a shingle that appears in one document weighs far more than
+    one that appears in every document.
+    """
+    df = collections.Counter()
+    n_docs = 0
+    for t in texts:
+        n_docs += 1
+        df.update(set(shingles(t or "", n)))
+    if not n_docs:
+        return {}
+    return {g: math.log(n_docs / (1 + c)) + 1.0 for g, c in df.items()}
+
+
+def weighted_overlap(a_sh, b_sh, idf):
+    """Fraction of a_sh's IDF weight that also appears in b_sh."""
+    if not a_sh:
+        return 0.0
+    num = sum(idf.get(g, 1.0) for g in (a_sh & b_sh))
+    den = sum(idf.get(g, 1.0) for g in a_sh)
+    return num / den if den else 0.0
 
 
 # --------------------------------------------------------------------- io
