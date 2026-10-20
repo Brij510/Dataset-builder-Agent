@@ -1,0 +1,60 @@
+{
+  "_comment": "Configuration for the instruction-dataset-builder pipeline. Copy to config.json and edit.",
+
+  "input": "./docs",
+  "output": "./dataset",
+
+  "_subjects_comment": "Default subject label for documents that match no prefix in subject_map.",
+  "subjects": ["General"],
+
+  "_subject_map_comment": "Map path prefixes to subject labels. Longest/most specific prefix wins by order.",
+  "subject_map": {
+    "Math/": "Math",
+    "Science/": "Science",
+    "SSC/": "Social Science"
+  },
+
+  "extract": {
+    "pages": 4,
+    "workers": 4,
+    "min_chars": 300,
+    "extensions": [".pdf", ".docx", ".txt", ".md"]
+  },
+
+  "atoms": {
+    "min_sentence": 30,
+    "max_sentence": 400,
+    "min_words": 5
+  },
+
+  "qa": {
+    "target": 20000,
+    "per_source_cap": 220,
+    "per_atom": 2,
+    "cloze_every": 3,
+    "answer_min": 40,
+    "answer_max": 700
+  },
+
+  "split": {
+    "eval_frac": 0.07,
+    "max_overlap": 0.10,
+    "shingle_n": 5,
+    "subject_caps": {
+      "Math": 12000,
+      "Science": 12000,
+      "Social Science": 6000
+    }
+  },
+
+  "llm": {
+    "_comment": "Optional: rewrites only the QUESTION, answer stays verbatim from source.",
+    "enabled": false,
+    "endpoint": "http://127.0.0.1:8000/v1",
+    "api_key": "",
+    "model": "auto",
+    "workers": 3,
+    "timeout": 240,
+    "max_tokens": 1500
+  }
+}

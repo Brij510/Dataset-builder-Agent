@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Stage 5 - validate the generated dataset.
+
+Hard failures (exit 1): bad JSON, broken ChatML, CSV/JSONL mismatch,
+watermark noise, duplicate instructions, eval/train instruction overlap,
+answer-overlap above the configured limit.
+Soft warnings: short answers, markdown fences, low template diversity.
+
+Usage:
+  python validate.py --output ./dataset [--max-overlap 0.10]
+"""
+import argparse
+import collections
+import csv
+import os
+import re
+import statistics
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import load_config, md5, norm_key, read_jsonl, shingles  # noqa: E402
+
+WATERMARK = re.compile(r"prashant\s*kirad|shobhit\s*nirwan|created with|"
+                       r"downloaded from|all rights reserved", re.I)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Validate a generated dataset")
+    ap.add_argument("--output", required=True)
+    ap.add_argument("--config")
+    ap.add_argument("--max-overlap", type=float)
+    ap.add_argument("--min-answer-chars", type=int, default=25)
+    args = ap.parse_args()
+
+    cfg = load_config(args.config)
+    limit = args.max_overlap if args.max_overlap is not None \
+        else cfg["split"]["max_overlap"]
+    n = cfg["split"].get("shingle_n", 5)
+
+    errors, warns = [], []
+    data = {}
+    for split in ("train", "eval"):
+        jp = os.path.join(args.output, f"{split}.jsonl")
+        cp = os.path.join(args.output, f"{split}.csv")
+        if not os.path.exists(jp):
+            errors.append(f"{split}: missing {jp}")
+            continue
+        rows = read_jsonl(jp)
+        for i, o in enumerate(rows, 1):
+            t = o.get("text", "")
+            if t.count("<|im_start|>") != 2 or t.count("<|im_end|>") != 2:
+                errors.append(f"{split} row {i}: broken ChatML markers")
+            if "<|im_start|>user" not in t or "<|im_start|>assistant" not in t:
+                errors.append(f"{split} row {i}: missing user/assistant roles")
+            if WATERMARK.search(t):
+                errors.append(f"{split} row {i}: contains watermark noise")
+            if "```" in t:
+                warns.append(f"{split} row {i}: contains a markdown fence")
+            if len(o.get("output", "")) < args.min_answer_chars:
+                warns.append(f"{split} row {i}: very short answer")
+        if os.path.exists(cp):
+            with open(cp, encoding="utf-8") as f:
+                cr = list(csv.reader(f))
+            if cr and cr[0] != ["instruction", "input", "output", "subject"]:
+                errors.append(f"{split}: unexpected CSV header {cr[0] if cr else None}")
+            if len(cr) - 1 != len(rows):
+                errors.append(f"{split}: CSV has {len(cr)-1} rows, JSONL has {len(rows)}")
+        data[split] = rows
+        print(f"{split}: {len(rows)} rows | subjects "
+              f"{dict(collections.Counter(r.get('subject') for r in rows))}")
+
+    if "train" in data and "eval" in data:
+        tr, ev = data["train"], data["eval"]
+        tr_i = {r["instruction"].lower().strip() for r in tr}
+        shared = sum(1 for r in ev if r["instruction"].lower().strip() in tr_i)
+        if shared:
+            errors.append(f"eval instructions also present in train: {shared}")
+
+        tr_sh = set()
+        for r in tr:
+            tr_sh |= shingles(r["output"], n)
+        worst, bad = 0.0, 0
+        for r in ev:
+            s = shingles(r["output"], n)
+            if s:
+                ov = len(s & tr_sh) / len(s)
+                worst = max(worst, ov)
+                if ov > limit:
+                    bad += 1
+        print(f"\nLeakage: shared instructions {shared} | "
+              f"max answer overlap {worst:.3f} (limit {limit})")
+        if bad:
+            errors.append(f"{bad} eval rows exceed the overlap limit")
+
+        prefixes = collections.Counter(" ".join(r["instruction"].split()[:2]).lower()
+                                       for r in tr)
+        print(f"Distinct question openers: {len(prefixes)}")
+        print("Top openers:", prefixes.most_common(8))
+        if len(prefixes) < 5 and len(tr) > 500:
+            warns.append("very low question diversity - check the qa.py rotation")
+
+        alen = [len(r["output"]) for r in tr]
+        qlen = [len(r["instruction"]) for r in tr]
+        print(f"Answer chars : min {min(alen)} median {int(statistics.median(alen))} max {max(alen)}")
+        print(f"Question chars: min {min(qlen)} median {int(statistics.median(qlen))} max {max(qlen)}")
+
+    if warns:
+        print(f"\nWarnings ({len(warns)}):")
+        for w in warns[:15]:
+            print("  -", w)
+    if errors:
+        print(f"\nERRORS ({len(errors)}):")
+        for e in errors[:30]:
+            print("  -", e)
+        sys.exit(1)
+    print("\nAll checks passed.")
+
+
+if __name__ == "__main__":
+    main()
