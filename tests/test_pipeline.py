@@ -167,6 +167,38 @@ class PipelineE2E(unittest.TestCase):
                 self.assertLessEqual(len(s & tr) / len(s), 0.10)
 
 
+class MaxPerAnswer(unittest.TestCase):
+    """max_per_answer > 1 re-asks the same fact; that must be visible."""
+
+    def test_max_per_answer_one_creates_no_near_duplicate_questions(self):
+        tmp = tempfile.mkdtemp(prefix="dsb_mpa_")
+        try:
+            src = os.path.join(tmp, "docs")
+            out = os.path.join(tmp, "out")
+            make_corpus(src)
+            cfg = os.path.join(tmp, "cfg.json")
+            write(cfg, json.dumps({
+                "subjects": ["Math", "Science", "Social Science"],
+                "auto_subject": True, "subject_map": {},
+                "qa": {"target": 500, "per_source_cap": 50, "per_atom": 2,
+                       "max_per_answer": 1, "cloze_every": 3},
+                "split": {"eval_frac": 0.2, "max_overlap": 0.10, "shingle_n": 5,
+                          "subject_caps": {}},
+            }))
+            run("extract.py", "--input", src, "--output", out, "--workers", "2")
+            run("dedupe.py", "--output", out)
+            run("atoms.py", "--output", out, "--config", cfg)
+            run("qa.py", "--output", out, "--config", cfg, "--target", "500")
+            run("assemble.py", "--output", out, "--config", cfg)
+            p = run("validate.py", "--output", out, "--config", cfg)
+            if "Near-duplicate question pairs" in p.stdout:
+                line = [l for l in p.stdout.splitlines()
+                        if "Near-duplicate question pairs" in l][0]
+                self.assertIn("Near-duplicate question pairs in train: 0", line)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class Determinism(unittest.TestCase):
     """Two runs over the same input must produce the same dataset."""
 

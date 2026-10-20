@@ -24,13 +24,19 @@ def main():
     ap.add_argument("--output", required=True)
     ap.add_argument("--config")
     ap.add_argument("--threshold", type=float, default=None,
-                    help="similarity above which the second document is dropped")
+                    help="Jaccard similarity above which the second document is dropped")
+    ap.add_argument("--min-chars", type=int, default=500,
+                    help="ignore documents shorter than this when comparing")
+    ap.add_argument("--min-shingles", type=int, default=30,
+                    help="ignore documents with fewer distinct shingles")
     ap.add_argument("--shingle-n", type=int, default=None)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    thr = args.threshold if args.threshold is not None else 0.60
+    thr = args.threshold if args.threshold is not None else 0.75
+    min_chars = args.min_chars
+    min_shingles = args.min_shingles
     n = args.shingle_n or cfg["split"].get("shingle_n", 5)
 
     path = os.path.join(args.output, "corpus.json")
@@ -41,7 +47,11 @@ def main():
 
     doc_sh = {}
     for src, text in corpus.items():
-        doc_sh[src] = shingles(text or "", n)
+        if len(text or "") < min_chars:
+            continue
+        s = shingles(text or "", n)
+        if len(s) >= min_shingles:
+            doc_sh[src] = s
     keys = sorted(doc_sh)
     dup_of = {}
     for i, a_key in enumerate(keys):
@@ -57,10 +67,16 @@ def main():
             if not b:
                 continue
             inter = len(a & b)
-            if inter / min(len(a), len(b)) > thr:
+            if not inter:
+                continue
+            # Jaccard, not containment: two different question papers share
+            # boilerplate and score high on containment, but their union is far
+            # larger than their intersection, so Jaccard separates them.
+            if inter / len(a | b) > thr:
                 dup_of[b_key] = a_key
 
-    print(f"[dedupe] {len(corpus)} documents, threshold {thr}")
+    print(f"[dedupe] {len(corpus)} documents, {len(doc_sh)} comparable, "
+          f"jaccard threshold {thr}")
     if dup_of:
         for dup, keep in sorted(dup_of.items()):
             print(f"[dedupe]   drop {dup}  (duplicate of {keep})")

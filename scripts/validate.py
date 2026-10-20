@@ -30,6 +30,8 @@ def main():
     ap.add_argument("--config")
     ap.add_argument("--max-overlap", type=float)
     ap.add_argument("--min-answer-chars", type=int, default=25)
+    ap.add_argument("--strict", action="store_true",
+                    help="treat warnings as failures (use in CI)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -126,11 +128,25 @@ def main():
                     if len(sa & sb) / min(len(sa), len(sb)) > 0.80:
                         dup_pairs.add((i, j))
         if dup_pairs:
-            print(f"Near-duplicate question pairs in train: {len(dup_pairs)}")
-            if len(dup_pairs) > max(20, len(tr) * 0.01):
-                warns.append(f"{len(dup_pairs)} near-duplicate question pairs - "
-                             f"consider tightening qa.max_per_answer or the "
-                             f"per-source cap")
+            # pairs inside one document are generator artefacts (the same atom
+            # re-asked in a different template); pairs across documents are the
+            # corpus restating the same fact and are a separate concern
+            same_doc = sum(1 for i, j in dup_pairs
+                           if (tr[i].get("source") or "") == (tr[j].get("source") or "")
+                           and (tr[i].get("output") or "") == (tr[j].get("output") or ""))
+            cross_doc = len(dup_pairs) - same_doc
+            print(f"Near-duplicate question pairs in train: {len(dup_pairs)} "
+                  f"({same_doc} same question+answer, {cross_doc} same question, "
+                  f"different answer)")
+            if same_doc > max(20, len(tr) * 0.01):
+                warns.append(
+                    f"{same_doc} rows repeat both the question and the answer - "
+                    f"these come from qa.max_per_answer > 1. Set it to 1 for "
+                    f"cleaner data, or grow the corpus instead")
+            if cross_doc > max(20, len(tr) * 0.02):
+                warns.append(
+                    f"{cross_doc} near-duplicate questions have different answers - "
+                    f"the corpus states the same fact in several places")
 
         prefixes = collections.Counter(" ".join((r.get("instruction") or "").split()[:2]).lower()
                                        for r in tr)
@@ -181,6 +197,9 @@ def main():
         print(f"\nERRORS ({len(errors)}):")
         for e in errors[:30]:
             print("  -", e)
+        sys.exit(1)
+    if args.strict and warns:
+        print(f"\nSTRICT MODE: {len(warns)} warning(s) treated as failures")
         sys.exit(1)
     print("\nAll checks passed.")
 

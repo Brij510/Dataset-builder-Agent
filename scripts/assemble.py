@@ -120,22 +120,29 @@ def main():
             if not a or not b:
                 continue
             inter = len(a & b)
-            if inter / min(len(a), len(b)) > 0.60:
+            if not inter:
+                continue
+            # Jaccard, matching dedupe.py: containment overestimates similarity
+            # for documents that share boilerplate but differ in content
+            if inter / len(a | b) > 0.75:
                 dup_of[doc_list[j][0]] = doc_list[i][0]
     if dup_of:
         print(f"[assemble] {len(dup_of)} near-duplicate documents detected; "
               f"dropping their rows")
         raw = [r for r in raw if r["source"] not in dup_of]
 
-    # ---- dedupe, honouring origin priority
+    # ---- dedupe, honouring origin priority.
+    # The answer bound must match qa.py's max_per_answer, otherwise the
+    # allowance the generator made is undone here and rows silently vanish.
+    max_per_answer = cfg["qa"].get("max_per_answer", 1)
     raw.sort(key=lambda r: PRIORITY.get(r["origin"], 9))
-    seen_i, seen_a, merged = set(), set(), []
+    seen_i, seen_a, merged = set(), collections.Counter(), []
     for r in raw:
         ik = r["instruction"].lower()[:150]
         ak = md5(norm_key(r["output"]))
-        if ik in seen_i or ak in seen_a:
+        if ik in seen_i or seen_a[ak] >= max_per_answer:
             continue
-        seen_i.add(ik); seen_a.add(ak)
+        seen_i.add(ik); seen_a[ak] += 1
         merged.append(r)
     print(f"[assemble] {len(raw)} input rows -> {len(merged)} unique")
     print(f"[assemble] by subject: {summarize_counts(merged)}")

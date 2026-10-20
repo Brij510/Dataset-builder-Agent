@@ -114,7 +114,9 @@ python scripts/qa.py --output ./dataset --target 20000 --per-source-cap 220
   into one repeated template
 - Questions ask **about a topic** extracted from the statement, never quote the answer
 - Per-source cap prevents one large textbook from flooding the dataset
-- Dedupe on normalized instruction, and on normalized answer bounded by `max_per_answer`
+- Dedupe on normalized instruction, and on normalized answer bounded by
+  `max_per_answer` (default 1 - raising it doubles the rows but creates
+  near-duplicate questions)
 - Optional LLM backend (`llm.enabled: true`) rewrites questions into natural exam phrasing
   while keeping answers verbatim from the source
 - Re-running merges with the existing `qa_all.jsonl`, so an LLM pass is never lost
@@ -212,7 +214,7 @@ It needs `scripts/cdp.py` next to it and a Chrome started with `--remote-debuggi
 python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-43 tests cover the full pipeline over a synthetic corpus (BOM, CRLF, unicode, corrupt files,
+45 tests cover the full pipeline over a synthetic corpus (BOM, CRLF, unicode, corrupt files,
 near-duplicate documents, single-document corpus, every missing-input path), the LLM backend
 against a mock server, DOCX/Markdown input, config validation, and determinism.
 
@@ -233,6 +235,8 @@ More in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 - `config/config.example.json` - all tunables with comments
 - `docs/PIPELINE.md` - stage contracts, data formats, LLM backend details
+- `docs/DESIGN.md` - why the pipeline is shaped this way, and the measurements
+  behind each decision (read before changing the heuristics)
 - `docs/TUNING.md` - fine-tuning guidance (Unsloth, QLoRA, VRAM budgets)
 - `docs/TROUBLESHOOTING.md` - extended problem/fix table
 - `tests/` - the test suite

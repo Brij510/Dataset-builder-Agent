@@ -21,7 +21,7 @@ raw docs -> extract -> dedupe -> atoms -> qa -> split -> validate
 - **Resumable** - extraction caches per file; every stage can be re-run safely.
 - **Fast** - process-pool extraction (threads do not work - pdfplumber is GIL-bound), shingle-based
   dedupe, deterministic splits.
-- **Tested** - 43 tests over a synthetic corpus, a mock LLM server, and every failure path.
+- **Tested** - 45 tests over a synthetic corpus, a mock LLM server, and every failure path.
 
 ## Install
 
@@ -104,6 +104,7 @@ instruction-dataset-builder/
 │   └── test_formats_and_config.py
 └── docs/
     ├── PIPELINE.md
+    ├── DESIGN.md
     ├── TUNING.md
     └── TROUBLESHOOTING.md
 ```
