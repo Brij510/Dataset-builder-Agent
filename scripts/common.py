@@ -10,8 +10,9 @@ import collections
 DEFAULT_CONFIG = {
     "input": "./docs",
     "output": "./dataset",
-    "subjects": ["General"],
+    "subjects": ["General"],   # labels the auto-detector may choose from
     "subject_map": {},          # {"Math/": "Math", "Science/": "Science"}
+    "auto_subject": True,       # infer a subject from content when no map matches
     "extract": {
         "pages": 4,             # pages per PDF to read
         "workers": 4,           # process-pool size
@@ -86,6 +87,9 @@ def clean_text(text, extra_noise=()):
     for p in list(NOISE_PATTERNS) + list(extra_noise):
         text = re.sub(p, " ", text, flags=re.IGNORECASE | re.MULTILINE)
     text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)     # de-hyphenate across lines
+    # PDF extraction often glues words together after punctuation
+    text = re.sub(r",(?=[a-z])", ", ", text)
+    text = re.sub(r"\.(?=[a-z]{2,}\b)", ". ", text)
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{2,}", "\n", text)
     return text.strip()
@@ -104,6 +108,14 @@ def unwrap(text, max_line=110):
     BULLET_START = re.compile(
         r"^[\(\)\-\*\u2022\u25CF\u25AA\u25A0\u00B7\u2023\u25AA\u2219]|^[a-z0-9]{1,3}[.)]\s+"
         r"|^\d+[.)]\s+|^[A-Z][.)]\s+")
+    # a line ending in one of these is grammatically unfinished, so the next
+    # line continues it even if the next line is short
+    DANGLING = re.compile(
+        r"\b(its|the|a|an|of|in|on|at|to|for|and|or|but|is|are|was|were|"
+        r"be|been|has|have|had|as|by|with|from|that|which|this|these|those|"
+        r"called|known|termed|referred|known as|known as the|such as|"
+        r"called its|known as its|including|except|besides|along with|"
+        r"consists of|comprises|contains|provides|gives|per|via)\s*$", re.I)
     out = []
     buf = ""
 
@@ -122,7 +134,11 @@ def unwrap(text, max_line=110):
             buf = line
             continue
         # previous line ends a sentence -> new unit
-        if re.search(r"[.!?:;]$", buf) or len(buf) > max_line:
+        if re.search(r"[.!?:;]$", buf) and not DANGLING.search(buf):
+            flush()
+            buf = line
+            continue
+        if len(buf) > max_line:
             flush()
             buf = line
             continue
@@ -130,6 +146,13 @@ def unwrap(text, max_line=110):
         if BULLET_START.match(line):
             flush()
             buf = line
+            continue
+        # the previous line is grammatically unfinished -> always join
+        if DANGLING.search(buf):
+            if buf.endswith("-"):
+                buf = buf[:-1] + line
+            else:
+                buf = buf + " " + line
             continue
         # a short previous line is a heading, not a wrapped sentence
         if len(buf) < 45:
@@ -252,6 +275,67 @@ def split_chat(text):
             ans = part.split("<|im_start|>assistant", 1)[1].strip()
     clean = lambda s: s.replace("<|im_start|>", "").replace("<|im_end|>", "").strip()
     return clean(user), clean(ans)
+
+
+SUBJECT_KEYWORDS = {
+    "Math": ["theorem", "polynomial", "equation", "triangle", "circle", "radius",
+             "coordinate", "probability", "trigonometry", "ap", "arithmetic",
+             "progression", "surface area", "volume", "algebra", "geometry",
+             "quadratic", "factor", "divisor", "real number", "rational",
+             "irrational", "pythagoras", "tangent", "sector", "cylinder", "cone",
+             "sphere", "matrix", "binomial", "statistics", "mean", "median"],
+    "Science": ["atom", "electron", "proton", "neutron", "chemical", "reaction",
+                "acid", "base", "salt", "oxidation", "reduction", "photosynthesis",
+                "respiration", "cell", "tissue", "organ", "blood", "heart", "brain",
+                "genetics", "heredity", "evolution", "magnetic", "electric",
+                "current", "voltage", "resistance", "ohm", "reflection", "refraction",
+                "lens", "mirror", "force", "motion", "energy", "power", "wave",
+                "sound", "light", "ozone", "ecosystem", "food chain", "pollution",
+                "metal", "non-metal", "periodic table", "isotope", "solution"],
+    "Social Science": ["democracy", "nationalism", "constitution", "parliament",
+                        "election", "federalism", "secularism", "caste", "gender",
+                        "globalization", "liberalization", "unemployment", "poverty",
+                        "population", "development", "sector", "agriculture",
+                        "industrialisation", "revolution", "treaty", "empire",
+                        "colonial", "print culture", "money and credit", "gdp",
+                        "human resources", "water resources", "minerals", "energy"],
+    "History": ["empire", "dynasty", "treaty", "revolution", "king", "emperor",
+                "war", "battle", "century", "civilisation", "colonial", "independence",
+                "mughal", "maurya", "gupta", "bronze age"],
+    "Geography": ["latitude", "longitude", "climate", "monsoon", "soil", "river",
+                  "plateau", "mountain", "population density", "urbanisation",
+                  "resources", "map", "hemisphere", "erosion", "glacier"],
+    "Economics": ["gdp", "inflation", "market", "supply", "demand", "monopoly",
+                  "tax", "budget", "bank", "loan", "credit", "unemployment",
+                  "sector", "national income", "fiscal"],
+    "English": ["poem", "novel", "prose", "literary", "character", "narrative",
+                "dialogue", "author", "theme", "protagonist"],
+    "Computer Science": ["algorithm", "variable", "loop", "array", "function",
+                         "python", "java", "programming", "code", "syntax",
+                         "database", "sql", "html", "css"],
+}
+
+
+def detect_subject(text, known=None, default="General", min_hits=3):
+    """Infer a subject label from document content by keyword scoring.
+
+    Used when no explicit subject_map entry matches. Only a label from
+    `known` (or the built-in table) can be returned.
+    """
+    if not text:
+        return default
+    low = text.lower()
+    best, best_score = default, 0
+    pool = {k: v for k, v in SUBJECT_KEYWORDS.items() if known is None or k in known}
+    for name, words in pool.items():
+        score = 0
+        for w in words:
+            n = low.count(w)
+            if n:
+                score += min(n, 8) * (2 if len(w) > 5 else 1)
+        if score > best_score:
+            best, best_score = name, score
+    return best if best_score >= min_hits else default
 
 
 def subject_for(rel_path, subject_map, default="General"):

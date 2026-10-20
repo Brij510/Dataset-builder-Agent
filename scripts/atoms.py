@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (read_json, write_jsonl, load_config, subject_for,  # noqa: E402
-                    summarize_counts, unwrap)
+                    summarize_counts, unwrap, detect_subject)
 
 DEF_RE = re.compile(
     r"^([A-Z][A-Za-z0-9 ,\-\(\)\/\.']{2,55}?)\s+"
@@ -26,7 +26,16 @@ LIST_RE = re.compile(r"^([A-Z][A-Za-z0-9 \-]{2,40}):\s+(.{20,300})$")
 BAD_CONCEPT = re.compile(
     r"^(you have|we have|in class|as we|it is|this is|there|here|when|if|for|"
     r"also|now|then|however|therefore|thus|note|remember|see|figure|table|"
-    r"chapter|unit|page|question|answer|example \d)\b", re.I)
+    r"chapter|unit|page|question|answer|example \d|what|which|who|whom|"
+    r"whose|where|why|how|you|we|they|it|he|she|him|her|his|hers|me|my|"
+    r"mine|myself|your|our|their|from|with|without|on|at|by|under|over|"
+    r"through|during|after|before|between|above|below|into|onto|per|via|"
+    r"given|following|above given|the same|all the|any of|one of)\b", re.I)
+
+# a concept containing a clause boundary is a fragment, not a term
+BAD_CONCEPT_CLAUSE = re.compile(
+    r",\s*(which|who|where|when|that|and|but|is|are|was|were|if|because|"
+    r"while|although|though|so)\b", re.I)
 
 CAUSE_RE = re.compile(
     r"\b(because|since|due to|as a result|therefore|so that|this leads to|"
@@ -105,7 +114,9 @@ def classify(sent, cfg):
     if m:
         concept, stmt = m.group(1).strip(" .:-'"), m.group(2).strip()
         if (1 <= len(concept.split()) <= 7 and len(stmt) > 25
-                and not BAD_CONCEPT.match(concept)):
+                and not BAD_CONCEPT.match(concept)
+                and not BAD_CONCEPT_CLAUSE.search(concept)
+                and sum(c.isalpha() for c in concept) / max(len(concept), 1) > 0.75):
             return "definition", concept, stmt
 
     ml = LIST_RE.match(sent)
@@ -160,11 +171,15 @@ def main():
         sys.exit(1)
 
     a = cfg["atoms"]
+    auto_detect = cfg.get("auto_subject", True)
+    known = cfg.get("subjects") or None
     atoms = []
     for rel, text in sorted(corpus.items()):
         if not text:
             continue
         subj = subject_for(rel, subject_map, default_subject)
+        if subj == default_subject and auto_detect and len(subject_map) == 0:
+            subj = detect_subject(text, known, default_subject)
         text = unwrap(text)
         for line in (l.strip() for l in text.split("\n")):
             if not (a["min_sentence"] <= len(line) <= a["max_sentence"] * 3):
@@ -180,6 +195,9 @@ def main():
                 if a.get("require_complete", True) and not looks_complete(sent):
                     continue
                 kind, concept, stmt = classify(sent, cfg)
+                # a source sentence that is itself a question is not a fact
+                if stmt.rstrip().endswith("?"):
+                    continue
                 atoms.append({"kind": kind, "concept": concept, "statement": stmt,
                               "subject": subj, "source": rel})
 

@@ -69,6 +69,10 @@ python scripts/extract.py --input ./my_docs --output ./dataset --pages 4 --worke
 python scripts/atoms.py --output ./dataset --subjects Math,Science,History
 ```
 
+Subjects are taken from `subject_map` (path prefix -> label). With no map
+match, `auto_subject: true` infers the label from document content using a
+built-in keyword table, so a mixed folder still produces a balanced dataset.
+
 Classifies each sentence into a typed atom:
 
 | Kind | Detected by | Question style produced |
@@ -113,17 +117,38 @@ Split strategy, in order of importance:
 
 Always read the printed `Max eval/train answer overlap` line. It must be `<= max-overlap`.
 
-### 5. Validate
+### 5. Validate and report
 
 ```bash
 python scripts/validate.py --output ./dataset
+python scripts/report.py  --output ./dataset --write report.md
 ```
 
-Checks: valid JSON per line, ChatML markers, CSV/JSONL row-count parity, no watermark noise,
-no markdown fences, duplicate instructions, eval/train instruction overlap, answer-shingle
-overlap, and question-template diversity. Exits non-zero on any hard failure.
+`validate.py` checks: valid JSON per line, ChatML markers, CSV/JSONL row-count parity, no
+watermark noise, no markdown fences, duplicate instructions, eval/train instruction overlap,
+answer-shingle overlap, and question-template diversity. It also reports **echo rows** -
+rows whose answer adds almost no new information beyond the question. Exits non-zero on any
+hard failure.
+
+`report.py` writes a markdown quality report: subject balance, atom-kind mix, question
+diversity, source coverage, length profile and split health.
 
 ## Advanced Options
+
+### Near-duplicate document handling
+
+Before splitting, `assemble.py` clusters source documents by answer shingles and drops
+near-duplicates (a textbook and its scan, for example). Without this, a document-holdout
+split cannot work and the eval set stops being honest. The script prints how many
+duplicates it removed.
+
+### Avoiding echo rows
+
+A question that already contains the answer teaches the model to repeat the prompt. The
+generator therefore asks about a **topic** extracted from the statement ("Explain the
+factors affecting...") rather than quoting the statement. A small fraction of rows
+deliberately quote it - those are tagged `kind: "restate"` and exist to teach paraphrase.
+`validate.py` reports the echo rate separately; keep it under ~15%.
 
 ### LLM-assisted question phrasing
 
@@ -171,6 +196,18 @@ See [docs/TUNING.md](docs/TUNING.md) for VRAM sizing, LoRA rank guidance, and T4
 | Model repeats one question form | Template rotation disabled | Ensure `qa.py` ran (not a hand-rolled loop) |
 
 More in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+## Monitoring a remote training run
+
+`scripts/monitor.py` polls an Unsloth Studio run over the Chrome DevTools Protocol and
+appends a status line to a log:
+
+```bash
+python scripts/monitor.py --url https://host.trycloudflare.com/studio --interval 60
+```
+
+It needs `scripts/cdp.py` next to it and a Chrome started with
+`--remote-debugging-port=9222`.
 
 ## Resources
 

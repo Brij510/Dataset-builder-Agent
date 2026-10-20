@@ -5,9 +5,12 @@
   "output": "./dataset",
 
   "_subjects_comment": "Default subject label for documents that match no prefix in subject_map.",
-  "subjects": ["General"],
+  "subjects": ["Math", "Science", "Social Science", "History", "Geography", "Economics"],
 
   "_subject_map_comment": "Map path prefixes to subject labels. Longest/most specific prefix wins by order.",
+  "_auto_subject_comment": "Infer a subject label from document content when no subject_map prefix matches.",
+  "auto_subject": true,
+
   "subject_map": {
     "Math/": "Math",
     "Science/": "Science",

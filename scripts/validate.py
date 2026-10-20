@@ -99,6 +99,35 @@ def main():
         if len(prefixes) < 5 and len(tr) > 500:
             warns.append("very low question diversity - check the qa.py rotation")
 
+        # A good pair adds information. If almost every content word of the
+        # answer is already in the question, the row teaches the model to echo.
+        # "restate" rows quote the statement on purpose (paraphrase training),
+        # so they are counted separately rather than treated as a defect.
+        echo = 0
+        restate = 0
+        scored = 0
+        for r in tr:
+            if r.get("kind") == "restate":
+                restate += 1
+                continue
+            q = set(re.findall(r"[a-z]{4,}", r["instruction"].lower()))
+            a = set(re.findall(r"[a-z]{4,}", r["output"].lower()))
+            if len(a) < 4:
+                continue
+            scored += 1
+            novelty = len(a - q) / len(a)
+            if novelty < 0.35:
+                echo += 1
+        if restate:
+            print(f"Restate-style rows (quote the statement on purpose): {restate}")
+        if scored:
+            pct = echo / scored * 100
+            print(f"Rows whose answer adds almost no new information: {echo} "
+                  f"({pct:.1f}%)")
+            if pct > 20:
+                warns.append(f"{pct:.0f}% of rows are echo rows - the model will "
+                             f"learn to repeat the question, not answer it")
+
         alen = [len(r["output"]) for r in tr]
         qlen = [len(r["instruction"]) for r in tr]
         print(f"Answer chars : min {min(alen)} median {int(statistics.median(alen))} max {max(alen)}")

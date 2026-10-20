@@ -15,6 +15,8 @@ raw docs -> [1] text corpus -> [2] knowledge atoms -> [3] QA pairs -> [4] split 
   that overlap eval answers are removed with a symmetric 5-gram shingle check.
 - **Diverse** - 11 atom kinds and ~60 question archetypes selected round-robin,
   so the dataset does not collapse into one repeated template.
+- **No echo rows** - questions ask *about* a topic instead of quoting the answer,
+  so the model learns to elaborate rather than to repeat the prompt.
 - **Resumable** - extraction caches per file; every stage can be re-run safely.
 - **Fast** - process-pool extraction (threads do not work - pdfplumber is
   GIL-bound), shingle-based dedupe, deterministic splits.
@@ -69,13 +71,16 @@ instruction-dataset-builder/
 ├── README.md
 ├── config/config.example.json
 ├── scripts/
-│   ├── common.py              shared utilities (cleaning, shingles, IO)
+│   ├── common.py              shared utilities (cleaning, unwrap, shingles, IO)
 │   ├── extract.py             stage 1
 │   ├── atoms.py               stage 2
 │   ├── qa.py                  stage 3
 │   ├── assemble.py            stage 4
 │   ├── validate.py            stage 5
 │   ├── pipeline.py            orchestrator
+│   ├── report.py              markdown quality report
+│   ├── monitor.py             watch a remote Unsloth Studio run (CDP)
+│   ├── cdp.py                 minimal Chrome DevTools Protocol client
 │   ├── finetune_template.py   Unsloth training template
 │   ├── evaluate_template.py   eval harness
 │   └── setup.sh

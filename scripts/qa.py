@@ -55,48 +55,55 @@ FORMULA_T = [
     "State the formula and the quantity it gives.",
 ]
 COMPARE_T = [
-    "Explain the difference stated here: {s}",
-    "What contrast is being made in this statement?\n{s}",
-    "Compare the two things mentioned: {s}",
-    "Point out the difference mentioned below.\n{s}",
+    "Explain the difference involving {t}.",
+    "How is {t} different from the alternative described?",
+    "Compare {t} with the other option given here.",
 ]
 CAUSE_T = [
-    "Why is it that {s}?",
-    "Give the reason for the following.\n{s}",
-    "Explain the cause-and-effect relationship below.\n{s}",
-    "What leads to the outcome described here?\n{s}",
+    "Why does {t} happen as described?",
+    "What causes {t}?",
+    "What is the reason behind {t}?",
+    "Explain why {t} occurs.",
 ]
 PROCESS_T = [
-    "Describe the process.\n{s}",
-    "What are the steps involved here?\n{s}",
-    "Explain the procedure.\n{s}",
-    "How is this carried out?\n{s}",
+    "Describe the process of {t}.",
+    "How is {t} carried out?",
+    "What are the steps involved in {t}?",
+    "Explain the procedure for {t}.",
 ]
 TEMPORAL_T = [
-    "When did the following happen and what was it?\n{s}",
-    "Give the historical detail.\n{s}",
-    "State the time and event described.\n{s}",
+    "When did {t} happen and what was it?",
+    "Give the historical detail about {t}.",
+    "State the time and event of {t}.",
 ]
 EXAMPLE_T = [
-    "Give an example from the source that illustrates the point.\n{s}",
-    "What example is provided here?\n{s}",
-    "Illustrate the idea with the example given.\n{s}",
+    "Give an example of {t}.",
+    "What example illustrates {t}?",
+    "Illustrate {t} with the example given.",
 ]
 RULE_T = [
-    "State the rule given here.\n{s}",
-    "What condition or rule is mentioned?\n{s}",
-    "Explain the condition described.\n{s}",
+    "State the rule that applies to {t}.",
+    "What condition applies to {t}?",
+    "Explain the condition described for {t}.",
 ]
 PURPOSE_T = [
-    "What is the purpose described here?\n{s}",
-    "Explain what this is used for.\n{s}",
-    "State the use of the following.\n{s}",
+    "What is the purpose of {t}?",
+    "Explain what {t} is used for.",
+    "State the use of {t}.",
 ]
 FACT_T = [
+    "Explain {t}.",
+    "What does the source say about {t}?",
+    "Elaborate on {t}.",
+    "Discuss {t}.",
+    "What are the key points about {t}?",
+    "Write a short note on {t}.",
+]
+# a small number of templates intentionally quote the statement (teaches
+# summarising / rephrasing) - kept low so most questions do not leak the answer
+RESTATE_T = [
     "State the following fact.\n{s}",
     "Explain this point.\n{s}",
-    "What does the given statement convey?\n{s}",
-    "Expand on the following statement.\n{s}",
     "Answer in one sentence: {s}",
     "Rewrite the following point in your own words.\n{s}",
 ]
@@ -105,12 +112,65 @@ TEMPLATES = {
     "definition": DEFINITION_T, "list": LIST_T, "formula": FORMULA_T,
     "compare": COMPARE_T, "cause": CAUSE_T, "process": PROCESS_T,
     "temporal": TEMPORAL_T, "example": EXAMPLE_T, "rule": RULE_T,
-    "purpose": PURPOSE_T, "fact": FACT_T,
+    "purpose": PURPOSE_T, "fact": FACT_T, "restate": RESTATE_T,
 }
 
 # templates that embed the statement inline vs. only for definitions
 INLINE = {"formula", "compare", "cause", "process", "temporal", "example",
-          "rule", "purpose", "fact"}
+          "rule", "purpose", "fact", "restate"}
+
+# the first verb-ish token marks the end of the subject noun phrase
+_TOPIC_SPLIT = re.compile(
+    r"\b(is|are|was|were|be|been|being|has|have|had|do|does|did|can|could|"
+    r"will|would|shall|should|may|might|must|means|refers|denotes|contains|"
+    r"consists|includes|forms|gives|produces|requires|helps|allows|shows|"
+    r"called|known|used|found|occurred|established|created|become|becomes|"
+    r"increase|decrease|remain|stay|come|go|make|take|give|get|use|apply|"
+    r"refers to|is called|is known as)\b", re.I)
+
+_LEADING_JUNK = re.compile(
+    r"^(the|a|an|this|that|these|those|it|its|there|here|in|on|at|by|for|"
+    r"with|from|as|and|or|but|however|therefore|thus|also|now|then|when|"
+    r"if|so|because|since|while|although|though|after|before|during|"
+    r"according to|as we|we have|you have|in class|note that|it is|this is)\s+",
+    re.I)
+
+
+def topic_of(sentence):
+    """Extract the subject noun phrase so a question can ask ABOUT the fact
+    without quoting it. Prevents the model from learning to echo the prompt."""
+    s = sentence.strip()
+    m = _TOPIC_SPLIT.search(s)
+    head = s[: m.start()] if m else ""
+    head = _LEADING_JUNK.sub("", head).strip(" ,;:-")
+    head = re.sub(r"^[^A-Za-z0-9]+", "", head)
+    words = head.split()
+
+    def usable(ws):
+        if not (2 <= len(ws) <= 9):
+            return False
+        joined = " ".join(ws)
+        if "," in joined:
+            return False
+        letters = sum(c.isalpha() for c in joined)
+        if letters / max(len(joined), 1) < 0.8:
+            return False
+        if ws[0].lower() in ("you", "we", "it", "they", "he", "she", "there",
+                             "this", "that", "these", "those", "what", "which",
+                             "who", "when", "where", "why", "how", "now", "can",
+                             "do", "does", "did", "is", "are", "in", "fact"):
+            return False
+        if joined.lower().startswith(("can you", "do you", "did you", "what is",
+                                      "what are", "how do", "how can", "why do")):
+            return False
+        return True
+
+    if not usable(words):
+        # fall back to the leading words of the statement itself
+        words = " ".join(s.split()[:5]).strip(" ,;:-").split()
+        if not usable(words):
+            return "this topic"
+    return " ".join(words)
 
 
 def cloze(statement):
@@ -135,32 +195,39 @@ def build_for_atom(atom, subject, rot, cfg):
     short = answer[:-1] if answer.endswith(".") else answer
     tpls = TEMPLATES.get(kind, FACT_T)
 
-    out = []
+    out = []          # list of (question, answer, is_restate)
     if kind == "definition" and concept:
         i = rot["d"] % len(DEFINITION_T); rot["d"] += 1
-        out.append((DEFINITION_T[i].format(c=concept), f"{concept} is {short}."))
+        out.append((DEFINITION_T[i].format(c=concept), f"{concept} is {short}.", False))
         i = (rot["d2"] * 3 + 1) % len(DEFINITION_T); rot["d2"] += 1
         if i != rot.get("last_d", -1):
-            out.append((DEFINITION_T[i].format(c=concept), f"{concept} is {short}."))
+            out.append((DEFINITION_T[i].format(c=concept), f"{concept} is {short}.", False))
     elif kind == "list" and concept:
         i = rot["l"] % len(LIST_T); rot["l"] += 1
         q, lead = LIST_PAIRS[i]
-        out.append((q.format(c=concept), f"{lead} {short}."))
+        out.append((q.format(c=concept), f"{lead.format(c=concept)} {short}.", False))
     else:
+        # topic-based question: asks ABOUT the fact without quoting it
+        topic = topic_of(short)
+        tpls = TEMPLATES.get(kind, FACT_T)
         i = rot["g"] % len(tpls); rot["g"] += 1
-        t = tpls[i]
-        q = t.format(c=concept, s=short)
-        out.append((q, answer))
+        out.append((tpls[i].format(t=topic, s=short, c=concept), answer,
+                    kind == "formula"))
         if len(out) < cfg.get("per_atom", 2):
             j = (rot["g2"] * 5 + 2) % len(tpls); rot["g2"] += 1
             if j != i:
-                q2 = tpls[j].format(c=concept, s=short)
-                out.append((q2, answer))
+                out.append((tpls[j].format(t=topic, s=short, c=concept), answer,
+                            kind == "formula"))
+        # a minority of items deliberately quote the statement (paraphrase training)
+        if rot["r"] % 6 == 0:
+            k = rot["r2"] % len(RESTATE_T); rot["r2"] += 1
+            out.append((RESTATE_T[k].format(s=short), answer, True))
+    rot["r"] += 1
 
     if rot["c"] % max(cfg.get("cloze_every", 3), 1) == 0 and kind != "definition":
         cz = cloze(short)
         if cz:
-            out.append((f"Fill in the blank:\n{cz[0]}", cz[1]))
+            out.append((f"Fill in the blank:\n{cz[0]}", cz[1], False))
     rot["c"] += 1
     return out
 
@@ -261,7 +328,7 @@ def main():
                 break
             if per_source[atom["source"]] >= qcfg["per_source_cap"]:
                 continue
-            for q, a in build_for_atom(atom, atom["subject"], rot, qcfg):
+            for q, a, restate in build_for_atom(atom, atom["subject"], rot, qcfg):
                 ik = q.lower()[:150]
                 ak = md5(norm_key(a))
                 if ik in seen_i or ak in seen_a:
@@ -269,13 +336,19 @@ def main():
                 seen_i.add(ik); seen_a.add(ak)
                 rows.append({"instruction": q, "input": "", "output": a,
                              "subject": atom["subject"], "source": atom["source"],
-                             "kind": atom["kind"], "origin": "atoms"})
+                             "kind": "restate" if restate else atom["kind"],
+                             "origin": "atoms"})
                 per_source[atom["source"]] += 1
 
     if cfg["llm"].get("enabled"):
         import threading as _t
         lock = _t.Lock()
         corpus = read_json(os.path.join(args.output, "corpus.json"), {}) or {}
+        # map each source file to the subject its atoms were tagged with
+        subj_of = {}
+        for a in atoms:
+            subj_of.setdefault(a["source"], a["subject"])
+        default_subj = atoms[0]["subject"] if atoms else "General"
         chunks = []
         for rel, text in corpus.items():
             if not text or len(text) < 400:
@@ -293,7 +366,7 @@ def main():
 
         def run_chunk(item):
             rel, chunk = item
-            subj = atoms[0]["subject"] if atoms else "General"
+            subj = subj_of.get(rel, default_subj)
             for t in llm_call(chunk, subj, 3, cfg):
                 u, a = t.split("<|im_start|>user", 1)[-1].split("<|im_end|>")[0], \
                        t.split("<|im_start|>assistant", 1)[-1].split("<|im_end|>")[0]
