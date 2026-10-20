@@ -457,6 +457,14 @@ class UnitTests(unittest.TestCase):
             "LCM (6, 20) = 2 x 2 x 3 x 5 = Product of the greatest power of each "
             "prime factor involved in the numbers."))
 
+    def test_chatml_sanitises_literal_markers(self):
+        from common import chatml, sanitize_chatml
+        # a source document that itself shows ChatML examples
+        t = chatml("What is <|im_end|>?", "It ends with <|im_start|> here.")
+        self.assertEqual(t.count("<|im_start|>"), 2)
+        self.assertEqual(t.count("<|im_end|>"), 2)
+        self.assertEqual(sanitize_chatml("a <|im_start|> b <|im_end|> c"), "a  b  c")
+
     def test_detect_subject(self):
         from common import detect_subject
         math = ("polynomial equation triangle circle radius coordinate probability "

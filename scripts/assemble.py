@@ -322,10 +322,13 @@ def main():
         train_rows += lst[:caps.get(s, 10 ** 9)]
     random.shuffle(train_rows)
 
-    # ---- final cleanup: drop any eval row still overlapping train
+    # ---- final cleanup: drop any eval row still overlapping train.
+    # The IDF basis is recomputed over the final train+eval sets so this
+    # script and validate.py measure exactly the same thing.
+    idf = build_idf([r.get("output") or "" for r in train_rows + eval_rows], n)
     tr_sh = set()
     for r in train_rows:
-        tr_sh |= shingles(r["output"], n)
+        tr_sh |= shingles(r.get("output") or "", n)
     keep = []
     for r in eval_rows:
         s = shingles(r["output"], n)

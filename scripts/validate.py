@@ -18,7 +18,8 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import load_config, read_jsonl, shingles  # noqa: E402
+from common import (build_idf, load_config, read_jsonl, shingles,  # noqa: E402
+                    weighted_overlap)
 
 WATERMARK = re.compile(r"prashant\s*kirad|shobhit\s*nirwan|created with|"
                        r"downloaded from|all rights reserved", re.I)
@@ -88,11 +89,13 @@ def main():
         tr_sh = set()
         for r in tr:
             tr_sh |= shingles(r.get("output") or "", n)
+        # the same IDF-weighted measure assemble.py uses, so the two agree
+        idf = build_idf([r.get("output") or "" for r in tr + ev], n)
         worst, bad = 0.0, 0
         for r in ev:
             s = shingles(r.get("output") or "", n)
             if s:
-                ov = len(s & tr_sh) / len(s)
+                ov = weighted_overlap(s, tr_sh, idf)
                 worst = max(worst, ov)
                 if ov > limit:
                     bad += 1

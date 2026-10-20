@@ -333,9 +333,22 @@ def write_json(path, obj):
         json.dump(obj, f, ensure_ascii=False)
 
 
+CHATML_MARKER = re.compile(r"<\|im_(?:start|end)\|>")
+
+
+def sanitize_chatml(text):
+    """Neutralise literal ChatML markers that came from the source material.
+
+    A document that itself contains `<|im_end|>` (a tutorial showing ChatML
+    examples, for instance) would otherwise inject a stray marker into the
+    row and break the format for the whole training file.
+    """
+    return CHATML_MARKER.sub("", text or "")
+
+
 def chatml(user, assistant):
-    return (f"<|im_start|>user\n{user}<|im_end|>\n"
-            f"<|im_start|>assistant\n{assistant}<|im_end|>")
+    return (f"<|im_start|>user\n{sanitize_chatml(user)}<|im_end|>\n"
+            f"<|im_start|>assistant\n{sanitize_chatml(assistant)}<|im_end|>")
 
 
 def split_chat(text):

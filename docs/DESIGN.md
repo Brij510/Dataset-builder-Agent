@@ -194,6 +194,28 @@ process-pool results are written into a dict keyed by path. There is a test
 for this, because a dataset that changes between runs makes every comparison
 afterwards meaningless.
 
+## Source text can contain ChatML markers
+
+A document that itself shows ChatML examples (a tutorial, a spec, a prompt
+guide) contains the literal string `<|im_end|>`. Written into a row verbatim,
+that injects a stray marker and breaks the format for the whole training
+file - one bad row is enough.
+
+`common.chatml()` strips literal `<|im_start|>` / `<|im_end|>` sequences from
+both the instruction and the answer before writing. This was found by the
+validator on a real corpus, not by inspection.
+
+## The validator and the splitter must measure the same thing
+
+Leakage is reported by two scripts. If they use different measures, one will
+pass while the other fails, and the disagreement looks like a bug in the
+dataset rather than in the tooling. Both now:
+
+- weight shingles by IDF over the same basis (the final train+eval sets)
+- use the same `max_overlap` limit
+
+so `max eval/train answer overlap` means the same number in both.
+
 ## Quality gates
 
 `validate.py` fails on: invalid JSON, broken ChatML, missing keys, CSV/JSONL
