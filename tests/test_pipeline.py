@@ -389,6 +389,24 @@ class UnitTests(unittest.TestCase):
         self.assertGreater(len(shingles(a) & shingles(b)) / len(shingles(a)), 0.4)
         self.assertEqual(len(shingles(a) & shingles(c)), 0)
 
+    def test_strip_enumerator(self):
+        from atoms import strip_enumerator
+        self.assertEqual(
+            strip_enumerator("10.1 (i), the line PQ and the circle have no common point."),
+            "The line PQ and the circle have no common point.")
+        self.assertEqual(
+            strip_enumerator("(ii) There are two common points A and B."),
+            "There are two common points A and B.")
+        # a normal sentence is untouched
+        self.assertEqual(strip_enumerator("A circle is a closed curve."),
+                         "A circle is a closed curve.")
+
+    def test_formula_sentences_survive_without_a_verb(self):
+        from atoms import looks_complete
+        self.assertTrue(looks_complete(
+            "LCM (6, 20) = 2 x 2 x 3 x 5 = Product of the greatest power of each "
+            "prime factor involved in the numbers."))
+
     def test_detect_subject(self):
         from common import detect_subject
         math = ("polynomial equation triangle circle radius coordinate probability "

@@ -56,7 +56,8 @@ Measured on a 66-document NCERT slice:
 | | candidate sentences | atoms | yield |
 |---|---|---|---|
 | `page.extract_text()` | 3,928 | 1,114 | 28.4% |
-| block-aware | 2,780 | 1,165 | **41.9%** |
+| block-aware | 2,780 | 1,165 | 41.9% |
+| block-aware + enumerator strip | 2,780 | 1,311 | **47.2%** |
 
 The block-aware version removes 1,148 spliced-garbage sentences and lifts the
 atom yield by half. The gain is not only yield: those spliced lines were
@@ -107,7 +108,8 @@ question already contained the answer. A model trained on that learns to
 repeat the prompt, not to answer.
 
 The generator now extracts the *subject noun phrase* of the statement and asks
-about that ("Explain the factors affecting..."). Echo rows fell to **9-12%**.
+about that ("Explain the factors affecting..."). Echo rows fell from 79% to
+**5.8%** on a 66-document NCERT slice.
 
 A small fraction of rows still quote the statement on purpose - they teach
 paraphrase. Those are tagged `kind: "restate"` and excluded from the echo

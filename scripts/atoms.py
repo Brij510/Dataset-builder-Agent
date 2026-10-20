@@ -85,6 +85,33 @@ VERBISH = re.compile(
     r"increase|decrease|remain|stay|come|go|make|take|give|get|use|apply)\b", re.I)
 
 
+# Only unambiguous list markers: a number, a parenthesised label, or a
+# roman numeral carrying punctuation. A bare word like "A" or "In" is never
+# an enumerator, even though both look like roman numerals.
+ENUMERATOR = re.compile(
+    r"^(?:"
+    r"\d+(?:\.\d+)*[.)]?\s*[,.:]?\s*"                       # 10.1 , 3. , 12)
+    r"|\([a-z]{1,4}\)\s*[,.:]?\s*"                            # (i) , (iv)
+    r"|(?<![a-z])(?:i|ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii)[.)]\s+"  # iv. , x.
+    r")+",
+    re.I)
+
+
+def strip_enumerator(s):
+    """Remove a leading section number or list marker and repair the capital.
+
+    '10.1 (i), the line PQ and the circle have no common point.'
+    -> 'The line PQ and the circle have no common point.'
+    """
+    m = ENUMERATOR.match(s)
+    if not m:
+        return s
+    rest = s[m.end():].strip()
+    if not rest or not rest[0].isalpha():
+        return s
+    return rest[0].upper() + rest[1:]
+
+
 def looks_complete(sent):
     """Reject mid-sentence fragments and dangling clauses."""
     s = sent.strip()
@@ -92,7 +119,7 @@ def looks_complete(sent):
         return False
     if INCOMPLETE_TAIL.search(s):
         return False
-    if not VERBISH.search(s):
+    if not VERBISH.search(s) and not FORMULA_RE.search(s):
         return False
     # too many commas relative to length reads like a table fragment
     if s.count(",") > max(2, len(s) // 40):
@@ -197,6 +224,7 @@ def main():
                 continue
             for sent in (split_sentences(s, a["min_sentence"], a["max_sentence"])
                          if len(s) > a["min_sentence"] * 2 else [s]):
+                sent = strip_enumerator(sent)
                 if len(sent.split()) < a["min_words"]:
                     continue
                 if a.get("require_complete", True) and not looks_complete(sent):
