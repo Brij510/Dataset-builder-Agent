@@ -167,6 +167,41 @@ class PipelineE2E(unittest.TestCase):
                 self.assertLessEqual(len(s & tr) / len(s), 0.10)
 
 
+class Determinism(unittest.TestCase):
+    """Two runs over the same input must produce the same dataset."""
+
+    def test_pipeline_is_deterministic(self):
+        tmp = tempfile.mkdtemp(prefix="dsb_det_")
+        try:
+            src = os.path.join(tmp, "docs")
+            out1 = os.path.join(tmp, "out1")
+            out2 = os.path.join(tmp, "out2")
+            make_corpus(src)
+            cfg = os.path.join(tmp, "cfg.json")
+            write(cfg, json.dumps({
+                "subjects": ["Math", "Science", "Social Science"],
+                "auto_subject": True, "subject_map": {},
+                "qa": {"target": 500, "per_source_cap": 50, "per_atom": 2,
+                       "max_per_answer": 2, "cloze_every": 3},
+                "split": {"eval_frac": 0.2, "max_overlap": 0.10, "shingle_n": 5,
+                          "subject_caps": {}},
+            }))
+            for out in (out1, out2):
+                run("extract.py", "--input", src, "--output", out, "--workers", "2")
+                run("dedupe.py", "--output", out)
+                run("atoms.py", "--output", out, "--config", cfg)
+                run("qa.py", "--output", out, "--config", cfg, "--target", "500")
+                run("assemble.py", "--output", out, "--config", cfg)
+            a = open(os.path.join(out1, "train.jsonl"), encoding="utf-8").read()
+            b = open(os.path.join(out2, "train.jsonl"), encoding="utf-8").read()
+            self.assertEqual(a, b, "train split differs between two identical runs")
+            ea = open(os.path.join(out1, "eval.jsonl"), encoding="utf-8").read()
+            eb = open(os.path.join(out2, "eval.jsonl"), encoding="utf-8").read()
+            self.assertEqual(ea, eb, "eval split differs between two identical runs")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 class AssembleSafetyNet(unittest.TestCase):
     """assemble.py must catch duplicate documents even if dedupe.py was skipped."""
 

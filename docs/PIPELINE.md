@@ -7,10 +7,14 @@ Stage contracts, data formats, and implementation notes.
 | Stage | Script | Reads | Writes | Resumable |
 |---|---|---|---|---|
 | 1 | `extract.py` | raw docs tree | `corpus.json` | yes (per-file cache) |
-| 2 | `atoms.py` | `corpus.json` | `atoms.jsonl` | yes (recompute, cheap) |
-| 3 | `qa.py` | `atoms.jsonl`, `corpus.json` | `qa_all.jsonl` | appends, dedupes on merge |
-| 4 | `assemble.py` | `qa_all.jsonl`, `gold.jsonl` | `train.*`, `eval.*` | yes (deterministic) |
-| 5 | `validate.py` | `train.*`, `eval.*` | - | n/a |
+| 2 | `dedupe.py` | `corpus.json` | `corpus.json` (pruned) | yes (idempotent) |
+| 3 | `atoms.py` | `corpus.json` | `atoms.jsonl` | yes (recompute, cheap) |
+| 4 | `qa.py` | `atoms.jsonl`, `corpus.json` | `qa_all.jsonl` | merges with the existing file |
+| 5 | `assemble.py` | `qa_all.jsonl`, `gold.jsonl` | `train.*`, `eval.*` | yes (deterministic) |
+| 6 | `validate.py` | `train.*`, `eval.*` | - | n/a |
+
+The whole chain is **deterministic**: the same input tree produces byte-identical
+`train.jsonl` and `eval.jsonl` on every run. There is a test for this.
 
 ## Data formats
 
@@ -54,6 +58,19 @@ bullet artifacts and de-hyphenates words broken across lines.
 
 The `text` field is ChatML, which is what Qwen3 / Llama 3 / Mistral expect natively.
 The CSV twin has columns `instruction,input,output,subject`.
+
+## Near-duplicate documents
+
+A textbook and its scan carry the same content under different paths. Two consequences:
+
+1. Generation effort is spent twice on identical sentences.
+2. Worse, the document-holdout split becomes dishonest: the model sees the same material in
+   both halves even though the files differ.
+
+`dedupe.py` compares every pair of documents by 5-gram shingle overlap and drops the later
+copy of any pair above 60% overlap. It rewrites `corpus.json` in place and keeps
+`corpus.json.pre-dedupe` as a backup. `assemble.py` runs the same check at row level as a
+safety net for corpora that skipped stage 2.
 
 ## Atom classification rules
 
@@ -119,6 +136,14 @@ start training on it, and add LLM rows in a later pass.
 
 If the LLM returns non-JSON, `qa.py` falls back to line-by-line extraction and
 skips malformed lines rather than failing the run.
+
+## Near-duplicate questions
+
+Exact instruction dedupe in the generator cannot catch two questions that mean the same thing
+with different wording ("Define the term polynomial ... class ten" vs "... class 10").
+`validate.py` compares question 4-grams across the training set and reports the number of pairs
+above 80% overlap. These rows waste training signal and make the eval set look easier than it
+is, so treat a high count as a signal to tighten `qa.max_per_answer` or the per-source cap.
 
 ## Leakage control
 
