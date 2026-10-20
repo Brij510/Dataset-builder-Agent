@@ -371,5 +371,48 @@ class QuestionQuality(unittest.TestCase):
                          f"fragment used as a topic: {t!r}")
 
 
+class DegenerateCorpora(unittest.TestCase):
+    """A tiny corpus must not crash the pipeline or empty the training set."""
+
+    def test_validate_survives_an_empty_training_set(self):
+        tmp = tempfile.mkdtemp(prefix="dsb_empty_")
+        try:
+            out = os.path.join(tmp, "out")
+            os.makedirs(out)
+            write_jsonl(os.path.join(out, "train.jsonl"), [])
+            write_jsonl(os.path.join(out, "eval.jsonl"), [make_row("a.txt", "Math", 0)])
+            p = run("validate.py", "--output", out)
+            self.assertIn("All checks passed", p.stdout)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_a_single_row_lands_in_train_not_eval(self):
+        tmp = tempfile.mkdtemp(prefix="dsb_one_")
+        try:
+            out = os.path.join(tmp, "out")
+            os.makedirs(out)
+            write_jsonl(os.path.join(out, "qa_all.jsonl"), [make_row("a.txt", "Math", 0)])
+            run("assemble.py", "--output", out, "--eval-frac", "0.07")
+            tr = read_jsonl(os.path.join(out, "train.jsonl"))
+            ev = read_jsonl(os.path.join(out, "eval.jsonl"))
+            self.assertEqual(len(tr), 1, "the only row must stay in train")
+            self.assertEqual(len(ev), 0, "a single row cannot also be eval")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_the_training_set_is_never_emptied(self):
+        tmp = tempfile.mkdtemp(prefix="dsb_notrain_")
+        try:
+            out = os.path.join(tmp, "out")
+            os.makedirs(out)
+            write_jsonl(os.path.join(out, "qa_all.jsonl"),
+                        [make_row("a.txt", "Math", 0)])
+            run("assemble.py", "--output", out, "--eval-frac", "0.5")
+            tr = read_jsonl(os.path.join(out, "train.jsonl"))
+            self.assertTrue(tr, "assemble produced no training rows at all")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

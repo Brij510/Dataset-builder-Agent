@@ -205,12 +205,17 @@ def main():
         for src in docs:
             if taken >= quota:
                 break
+            # never take a document that would leave the training set empty
+            if taken == 0 and len(by_src[src]) >= len(merged):
+                continue
             take(src)
             taken += len(by_src[src])
         if not taken and docs:
-            # this subject has no document at all; take the smallest one
+            # this subject has no document at all; take the smallest one,
+            # unless that would leave nothing to train on
             smallest = min(docs, key=lambda src: len(by_src[src]))
-            take(smallest)
+            if len(by_src[smallest]) < len(merged):
+                take(smallest)
 
     # ---- symmetric overlap filter between train candidates and eval.
     # Weighted by IDF so shared boilerplate does not count as leakage - only
@@ -256,7 +261,33 @@ def main():
 
     # Fallback: too few documents to hold one out without gutting train.
     # Switch to a row-level holdout instead (shingle filter still applies).
-    if len(train_rows) < 0.2 * len(merged) and len(merged) > 10:
+    if not train_rows and len(merged) > 0:
+        # The holdout took everything. A training set with no rows is not a
+        # dataset, so fall back to a row-level holdout - but only if rows are
+        # actually left over. With a single row there is nothing to split,
+        # and the row must go to train.
+        if len(merged) > 1:
+            print("[assemble] document holdout left no training rows; "
+                  "falling back to row-level holdout")
+            eval_rows = [r for r in merged if id(r) in eval_ids]
+            if len(eval_rows) < target:
+                extra = [r for r in merged if id(r) not in eval_ids]
+                random.shuffle(extra)
+                eval_rows += extra[:max(0, target - len(eval_rows))]
+            eval_ids = {id(r) for r in eval_rows}
+            train_rows, dropped = [], 0
+            for limit in (scfg["max_overlap"], scfg["max_overlap"] * 2, 1.0):
+                train_rows, dropped = build_train(limit)
+                if len(train_rows) >= 0.2 * len(merged) or limit >= 1.0:
+                    break
+        else:
+            # one row only - it cannot be both train and eval
+            eval_rows = []
+            eval_ids = set()
+            used_sources.discard(next(iter(used_sources), None))
+            train_rows, dropped = build_train(scfg["max_overlap"])
+            print("[assemble] a single row cannot be split; kept it in train")
+    elif len(train_rows) < 0.2 * len(merged) and len(merged) > 10:
         print("[assemble] document holdout would gut train; "
               "falling back to row-level holdout")
         eval_rows = [r for r in merged if id(r) in eval_ids]

@@ -193,8 +193,16 @@ def main():
 
         alen = [len(r.get("output") or "") for r in tr]
         qlen = [len(r.get("instruction") or "") for r in tr]
-        print(f"Answer chars : min {min(alen)} median {int(statistics.median(alen))} max {max(alen)}")
-        print(f"Question chars: min {min(qlen)} median {int(statistics.median(qlen))} max {max(qlen)}")
+        if alen:
+            print(f"Answer chars : min {min(alen)} "
+                  f"median {int(statistics.median(alen))} max {max(alen)}")
+        else:
+            print("Answer chars : no training rows to measure")
+        if qlen:
+            print(f"Question chars: min {min(qlen)} "
+                  f"median {int(statistics.median(qlen))} max {max(qlen)}")
+        else:
+            print("Question chars: no training rows to measure")
 
     if warns:
         print(f"\nWarnings ({len(warns)}):")

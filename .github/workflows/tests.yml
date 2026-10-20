@@ -34,11 +34,21 @@ jobs:
 
       - name: Smoke test the pipeline end to end
         run: |
-          mkdir -p /tmp/smoke/docs/Math
-          printf 'A polynomial in one variable x is an expression of the form p(x) = a_n x^n plus a constant.\nThe highest power of x is called the degree of the polynomial.\n' > /tmp/smoke/docs/Math/algebra.txt
-          python scripts/pipeline.py --input /tmp/smoke/docs --output /tmp/smoke/out --target 20
+          mkdir -p /tmp/smoke/docs/Math /tmp/smoke/docs/Geometry
+          printf 'A polynomial in one variable x is an expression of the form p(x) = a_n x^n plus a constant term.\nThe highest power of x in a polynomial is called the degree of that polynomial.\nThe Remainder Theorem states that if a polynomial p(x) is divided by (x - a), then the remainder is p(a).\n' > /tmp/smoke/docs/Math/algebra.txt
+          printf 'A circle is a closed curve in the plane whose every point lies at a fixed distance from the centre.\nThe radius of a circle is the fixed distance from the centre to any point on the circle.\nThe area of a circle is the product of pi and the square of its radius.\n' > /tmp/smoke/docs/Geometry/circles.txt
+          python scripts/pipeline.py --input /tmp/smoke/docs --output /tmp/smoke/out --target 40
           test -s /tmp/smoke/out/train.jsonl
           test -s /tmp/smoke/out/eval.jsonl
+
+      - name: Smoke test a single-document corpus
+        run: |
+          mkdir -p /tmp/smoke1/docs/Math
+          printf 'A polynomial in one variable x is an expression of the form p(x) = a_n x^n plus a constant.\nThe highest power of x is called the degree of the polynomial.\n' > /tmp/smoke1/docs/Math/algebra.txt
+          python scripts/pipeline.py --input /tmp/smoke1/docs --output /tmp/smoke1/out --target 20
+          # one document cannot be split, so the rows must all stay in train
+          # and the pipeline must still exit cleanly
+          test -s /tmp/smoke1/out/train.jsonl
 
   lint:
     runs-on: ubuntu-latest
