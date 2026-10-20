@@ -13,6 +13,7 @@ DEFAULT_CONFIG = {
     "subjects": ["General"],   # labels the auto-detector may choose from
     "subject_map": {},          # {"Math/": "Math", "Science/": "Science"}
     "auto_subject": True,       # infer a subject from content when no map matches
+    "subject_keywords": {},      # extra label -> keyword list for auto-detection
     "extract": {
         "pages": 4,             # pages per PDF to read
         "workers": 4,           # process-pool size
@@ -359,17 +360,21 @@ SUBJECT_KEYWORDS = {
 }
 
 
-def detect_subject(text, known=None, default="General", min_hits=3):
+def detect_subject(text, known=None, default="General", min_hits=3, extra_keywords=None):
     """Infer a subject label from document content by keyword scoring.
 
     Used when no explicit subject_map entry matches. Only a label from
-    `known` (or the built-in table) can be returned.
+    `known` (or the built-in table) can be returned. `extra_keywords` lets a
+    config file add its own labels without editing this module.
     """
     if not text:
         return default
     low = text.lower()
     best, best_score = default, 0
-    pool = {k: v for k, v in SUBJECT_KEYWORDS.items() if known is None or k in known}
+    table = dict(SUBJECT_KEYWORDS)
+    for name, words in (extra_keywords or {}).items():
+        table[name] = list(table.get(name, [])) + list(words)
+    pool = {k: v for k, v in table.items() if known is None or k in known}
     for name, words in pool.items():
         score = 0
         for w in words:

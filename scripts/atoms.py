@@ -179,7 +179,8 @@ def main():
             continue
         subj = subject_for(rel, subject_map, default_subject)
         if subj == default_subject and auto_detect and len(subject_map) == 0:
-            subj = detect_subject(text, known, default_subject)
+            subj = detect_subject(text, known, default_subject,
+                                  extra_keywords=cfg.get("subject_keywords"))
         text = unwrap(text)
         for line in (l.strip() for l in text.split("\n")):
             if not (a["min_sentence"] <= len(line) <= a["max_sentence"] * 3):

@@ -92,6 +92,8 @@ def main():
     ap.add_argument("--workers", type=int, default=max(2, (os.cpu_count() or 4) - 1))
     ap.add_argument("--ext", default=".pdf,.docx,.txt,.md")
     ap.add_argument("--min-chars", type=int, default=300)
+    ap.add_argument("--limit", type=int, default=0,
+                    help="only process the first N documents (quick trials)")
     ap.add_argument("--config", help="optional config file (values act as defaults)")
     args = ap.parse_args()
 
@@ -109,6 +111,8 @@ def main():
     files = collect_files(args.input, exts)
     todo = [f for f in files
             if os.path.relpath(f, args.input) not in corpus]
+    if args.limit and args.limit > 0:
+        todo = todo[: args.limit]
     print(f"[extract] {len(files)} documents found, {len(todo)} to parse, "
           f"{args.workers} workers, {args.pages}p", flush=True)
     if not todo:
@@ -125,10 +129,12 @@ def main():
             rel, text = fut.result()
             corpus[rel] = text
             done += 1
-            if done % 25 == 0:
+            if done % 25 == 0 or done == len(todo):
                 write_json(corpus_path, corpus)
                 rate = done / max(time.time() - t0, 0.001)
-                print(f"  {done}/{len(todo)}  {rate:.1f} doc/s", flush=True)
+                eta = (len(todo) - done) / rate if rate > 0 else 0
+                print(f"  {done}/{len(todo)}  {rate:.1f} doc/s  eta {eta/60:.1f} min",
+                      flush=True)
     write_json(corpus_path, corpus)
 
     kept = {k: v for k, v in corpus.items() if len(v) >= args.min_chars}

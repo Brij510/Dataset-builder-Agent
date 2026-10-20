@@ -99,6 +99,39 @@ def main():
         if bad:
             errors.append(f"{bad} eval rows exceed the overlap limit")
 
+        # near-duplicate questions: same meaning, different wording.
+        # Exact dedupe in the generator cannot catch these, and they waste
+        # training signal while making the eval set look easier than it is.
+        qsh = {}
+        for i, r in enumerate(tr):
+            qsh[i] = shingles((r.get("instruction") or "").lower(), 4)
+        inv = collections.defaultdict(list)
+        for i, ss in qsh.items():
+            for g in ss:
+                inv[g].append(i)
+        dup_pairs = set()
+        for g, ids in inv.items():
+            if len(ids) > 12:
+                continue
+            for a in range(len(ids)):
+                for b in range(a + 1, len(ids)):
+                    i, j = ids[a], ids[b]
+                    if i > j:
+                        i, j = j, i
+                    if (i, j) in dup_pairs:
+                        continue
+                    sa, sb = qsh[i], qsh[j]
+                    if not sa or not sb:
+                        continue
+                    if len(sa & sb) / min(len(sa), len(sb)) > 0.80:
+                        dup_pairs.add((i, j))
+        if dup_pairs:
+            print(f"Near-duplicate question pairs in train: {len(dup_pairs)}")
+            if len(dup_pairs) > max(20, len(tr) * 0.01):
+                warns.append(f"{len(dup_pairs)} near-duplicate question pairs - "
+                             f"consider tightening qa.max_per_answer or the "
+                             f"per-source cap")
+
         prefixes = collections.Counter(" ".join((r.get("instruction") or "").split()[:2]).lower()
                                        for r in tr)
         print(f"Distinct question openers: {len(prefixes)}")
