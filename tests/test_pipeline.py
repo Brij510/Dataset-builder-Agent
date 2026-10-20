@@ -4,7 +4,6 @@
 Run:  python tests/test_pipeline.py
 Exits non-zero on the first failure summary.
 """
-import io
 import json
 import os
 import shutil
@@ -108,7 +107,7 @@ class PipelineE2E(unittest.TestCase):
                         f"no subject detected, got {subs}")
 
     def test_05_qa(self):
-        p = run("qa.py", "--output", self.out, "--config", self.cfg, "--target", "500")
+        run("qa.py", "--output", self.out, "--config", self.cfg, "--target", "500")
         rows = [json.loads(l) for l in open(os.path.join(self.out, "qa_all.jsonl")) if l.strip()]
         self.assertGreater(len(rows), 5)
         for r in rows:

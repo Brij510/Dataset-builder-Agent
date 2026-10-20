@@ -18,7 +18,7 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import load_config, md5, norm_key, read_jsonl, shingles  # noqa: E402
+from common import load_config, read_jsonl, shingles  # noqa: E402
 
 WATERMARK = re.compile(r"prashant\s*kirad|shobhit\s*nirwan|created with|"
                        r"downloaded from|all rights reserved", re.I)

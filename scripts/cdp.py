@@ -11,7 +11,7 @@ Usage:
   python cdp.py upload <selector> <file1> [file2 ...]
   python cdp.py waittext <text> [timeout_s]
 """
-import asyncio, json, sys, os, base64, urllib.request
+import asyncio, json, sys, base64, urllib.request
 import websockets
 
 CDP = "http://127.0.0.1:9223"

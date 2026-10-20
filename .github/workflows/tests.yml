@@ -1,0 +1,53 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Syntax check every script
+        run: |
+          python -m compileall -q scripts/ tests/
+
+      - name: Run test suite
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Smoke test the pipeline end to end
+        run: |
+          mkdir -p /tmp/smoke/docs/Math
+          printf 'A polynomial in one variable x is an expression of the form p(x) = a_n x^n plus a constant.\nThe highest power of x is called the degree of the polynomial.\n' > /tmp/smoke/docs/Math/algebra.txt
+          python scripts/pipeline.py --input /tmp/smoke/docs --output /tmp/smoke/out --target 20
+          test -s /tmp/smoke/out/train.jsonl
+          test -s /tmp/smoke/out/eval.jsonl
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: python -m pip install --quiet ruff
+      - name: Lint
+        run: ruff check scripts/ tests/ --select E9,F63,F7,F82

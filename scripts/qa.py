@@ -14,13 +14,12 @@ import json
 import os
 import re
 import sys
-import threading
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (clean_answer, is_bad_answer, load_config, md5,  # noqa: E402
-                    norm_key, read_jsonl, summarize_counts, write_jsonl)
+from common import (chatml, clean_answer, is_bad_answer, load_config, md5,  # noqa: E402
+                    norm_key, read_json, read_jsonl, summarize_counts, write_jsonl)
 
 # ------------------------------------------------------------------ templates
 
@@ -342,8 +341,9 @@ def main():
                 if seen_a[ak] >= max_per_answer:
                     continue
                 seen_i.add(ik); seen_a[ak] += 1
-                rows.append({"instruction": q, "input": "", "output": a,
-                             "subject": atom["subject"], "source": atom["source"],
+                rows.append({"text": chatml(q, a), "instruction": q, "input": "",
+                             "output": a, "subject": atom["subject"],
+                             "source": atom["source"],
                              "kind": "restate" if restate else atom["kind"],
                              "origin": "atoms"})
                 per_source[atom["source"]] += 1
@@ -381,12 +381,13 @@ def main():
                 with lock:
                     ik = u.lower()[:150]
                     ak = md5(norm_key(a))
-                    if ik in seen_i or ak in seen_a:
+                    if ik in seen_i or seen_a[ak] >= max_per_answer:
                         continue
-                    seen_i.add(ik); seen_a.add(ak)
-                    rows.append({"instruction": u.strip(), "input": "", "output": a.strip(),
-                                 "subject": subj, "source": rel, "kind": "llm",
-                                 "origin": "llm"})
+                    seen_i.add(ik); seen_a[ak] += 1
+                    u2, a2 = u.strip(), a.strip()
+                    rows.append({"text": chatml(u2, a2), "instruction": u2, "input": "",
+                                 "output": a2, "subject": subj, "source": rel,
+                                 "kind": "llm", "origin": "llm"})
 
         with ThreadPoolExecutor(max_workers=cfg["llm"].get("workers", 3)) as ex:
             futs = [ex.submit(run_chunk, c) for c in chunks]
