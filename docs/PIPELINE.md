@@ -12,6 +12,7 @@ Stage contracts, data formats, and implementation notes.
 | 4 | `qa.py` | `atoms.jsonl`, `corpus.json` | `qa_all.jsonl` | merges with the existing file |
 | 5 | `assemble.py` | `qa_all.jsonl`, `gold.jsonl` | `train.*`, `eval.*` | yes (deterministic) |
 | 6 | `validate.py` | `train.*`, `eval.*` | - | n/a |
+| 7 | `ground.py` | `train.*`, `eval.*`, `corpus.json` | `*_grounded.jsonl` (optional) | n/a |
 
 The whole chain is **deterministic**: the same input tree produces byte-identical
 `train.jsonl` and `eval.jsonl` on every run. There is a test for this.
@@ -53,11 +54,15 @@ bullet artifacts and de-hyphenates words broken across lines.
 
 ```json
 {"text": "<|im_start|>user\nDefine Polynomials.<|im_end|>\n<|im_start|>assistant\nPolynomials are ...<|im_end|>",
- "subject": "Math", "instruction": "Define Polynomials.", "input": "", "output": "Polynomials are ..."}
+ "subject": "Math", "instruction": "Define Polynomials.", "input": "", "output": "Polynomials are ...",
+ "kind": "definition", "source": "Math/NCERT/CH-2 POLYNOMIALS.pdf", "origin": "atoms"}
 ```
 
 The `text` field is ChatML, which is what Qwen3 / Llama 3 / Mistral expect natively.
-The CSV twin has columns `instruction,input,output,subject`.
+`source` points back at the document the row came from and is never dropped - a row
+that cannot be traced to its source cannot be audited or corrected.
+
+The CSV twin has columns `instruction,input,output,subject,source`.
 
 ## Text blocks
 
@@ -170,13 +175,19 @@ The split is the part most pipelines get wrong. This implementation:
 1. holds out **whole source documents** for eval - the strongest guarantee that
    the model has not memorised the material
 2. computes 5-gram shingles of every answer, weighted by inverse document frequency so
-   that boilerplate shared across the corpus cannot by itself trigger the limit
+   that boilerplate shared across the corpus cannot by itself trigger the limit.
+   A shingle present in every answer weighs exactly zero
 3. drops any train row whose answer shares more than `max_overlap` (default
    10%) of shingles with any eval answer, measured **in both directions** so
-   that a long eval answer and a short train answer cannot slip through
-4. drops any remaining leaky eval rows
+   that a long eval answer and a short train answer cannot slip through, and
+   against the single row that actually conflicts rather than the union of all
+   train shingles
+4. drops any remaining leaky **train** rows - a leak is always resolved by
+   dropping the train row, never the eval row, because the eval set is the
+   scarce resource and must keep covering every subject
 5. prints the worst surviving overlap - it must be at or below the limit
 
-Always read that number. If it is above the limit, the corpus contains
-near-duplicate documents (a textbook and its scan, for example) and the fix is
-to raise `max_overlap` or to exclude one copy of each duplicate pair.
+Always read that number, and check that `validate.py` prints the same one. If it is
+above the limit, the corpus contains near-duplicate documents (a textbook and its scan,
+for example) and the fix is to exclude one copy of each duplicate pair, or to hold out
+more source documents.

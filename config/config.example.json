@@ -1,5 +1,5 @@
 {
-  "_comment": "Configuration for the instruction-dataset-builder pipeline. Copy to config.json and edit.",
+  "_comment": "Configuration for the dataset-builder pipeline. Copy to config.json and edit.",
 
   "input": "./docs",
   "output": "./dataset",

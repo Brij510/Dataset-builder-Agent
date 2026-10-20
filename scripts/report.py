@@ -17,7 +17,8 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import read_jsonl, shingles  # noqa: E402
+from common import (build_idf, build_overlap_index, max_overlap,  # noqa: E402
+                    read_jsonl, shingles)
 
 
 def stat(values):
@@ -27,6 +28,25 @@ def stat(values):
         "min": min(values), "median": int(statistics.median(values)),
         "mean": int(statistics.mean(values)), "max": max(values),
     }
+
+
+def worst_overlap(train, ev, n=5):
+    """Highest IDF-weighted, symmetric answer overlap between eval and train.
+
+    Same measure assemble.py and validate.py use, so the report cannot
+    disagree with the number the splitter printed.
+    """
+    tr_sh = [shingles(r.get("output") or "", n) for r in train]
+    if not tr_sh:
+        return 0.0
+    inv = build_overlap_index(tr_sh)
+    idf = build_idf([r.get("output") or "" for r in train + ev], n)
+    worst = 0.0
+    for r in ev:
+        s = shingles(r.get("output") or "", n)
+        if s:
+            worst = max(worst, max_overlap(s, inv, tr_sh, idf, symmetric=True)[0])
+    return worst
 
 
 def main():
@@ -109,14 +129,7 @@ def main():
     if train and ev:
         tr_i = {r["instruction"].lower().strip() for r in train}
         shared = sum(1 for r in ev if r["instruction"].lower().strip() in tr_i)
-        tr_sh = set()
-        for r in train:
-            tr_sh |= shingles(r["output"])
-        worst = 0.0
-        for r in ev:
-            s = shingles(r["output"])
-            if s:
-                worst = max(worst, len(s & tr_sh) / len(s))
+        worst = worst_overlap(train, ev)
         redundant = 0
         scored = 0
         for r in train:
@@ -177,14 +190,7 @@ def main():
 
     if train and ev:
         total += 1
-        worst = 0.0
-        tr_sh = set()
-        for r in train:
-            tr_sh |= shingles(r.get("output") or "")
-        for r in ev:
-            s = shingles(r.get("output") or "")
-            if s:
-                worst = max(worst, len(s & tr_sh) / len(s))
+        worst = worst_overlap(train, ev)
         ok = worst <= 0.10
         checks.append(("eval/train answer overlap <= 0.10", f"{worst:.3f}", ok))
         score += ok

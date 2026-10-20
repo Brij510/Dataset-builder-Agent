@@ -1,17 +1,17 @@
 ---
-name: "Instruction Dataset Builder"
-description: "Builds high-quality instruction-tuning datasets (train/eval JSONL + CSV) from raw documents - PDFs, DOCX, TXT, Markdown - by extracting text, mining knowledge atoms (definitions, formulas, comparisons, processes, causes, lists), generating diverse grounded QA pairs, and performing leakage-controlled train/eval splits. Use when creating SFT or fine-tuning data for LLMs from textbooks, notes, question banks, legal or medical corpora, or when asked to turn documents into a training dataset, build a RAG/eval set, or scale QA generation to 10k+ rows."
+name: "dataset-builder"
+description: "Builds high-quality instruction-tuning datasets (train/eval JSONL + CSV) from raw documents - PDFs, DOCX, TXT, Markdown - by extracting text, mining knowledge atoms (definitions, formulas, comparisons, processes, causes, lists), generating diverse grounded QA pairs, splitting with leakage control, and verifying that every answer is grounded in its source. Use when creating SFT or fine-tuning data for LLMs from textbooks, notes, question banks, legal or medical corpora, or when asked to turn documents into a training dataset, build a RAG/eval set, or scale QA generation to 10k+ rows."
 ---
 
-# Instruction Dataset Builder
+# Dataset Builder
 
 ## What This Skill Does
 
 Converts a folder of raw documents into a production-ready instruction-tuning dataset with a
-train/eval split that cannot leak. The pipeline is six stages:
+train/eval split that cannot leak. The pipeline is seven stages:
 
 ```
-raw docs -> [1] extract -> [2] dedupe -> [3] atoms -> [4] QA -> [5] split -> [6] validate
+raw docs -> [1] extract -> [2] dedupe -> [3] atoms -> [4] QA -> [5] split -> [6] validate -> [7] ground
 ```
 
 Every stage is standalone, resumable and cached. Nothing is fabricated: each answer is grounded
@@ -38,7 +38,7 @@ back to the file it came from.
 ## Quick Start
 
 ```bash
-# One-shot: extract -> dedupe -> atoms -> qa -> split -> validate
+# One-shot: extract -> dedupe -> atoms -> qa -> split -> validate -> ground
 python scripts/pipeline.py --input ./my_docs --output ./dataset --config config/config.example.json
 
 # Or stage by stage (each is resumable and cached)
@@ -48,6 +48,7 @@ python scripts/atoms.py    --output ./dataset --subjects Math,Science
 python scripts/qa.py       --output ./dataset --target 20000
 python scripts/assemble.py --output ./dataset --eval-frac 0.07
 python scripts/validate.py --output ./dataset
+python scripts/ground.py   --output ./dataset
 ```
 
 Outputs in `./dataset`:
@@ -59,6 +60,7 @@ Outputs in `./dataset`:
 | `corpus.json` | Cached extracted text per source file |
 | `atoms.jsonl` | Mined knowledge atoms |
 | `qa_all.jsonl` | All generated QA before splitting |
+| `train_grounded.jsonl` / `eval_grounded.jsonl` | Optional: rows that pass a grounding threshold |
 
 ## Step-by-Step Guide
 
@@ -150,13 +152,20 @@ Split strategy, in order of importance:
    rows so the eval set mirrors the training mix
 2. **IDF-weighted shingle filter** - any train row sharing more than
    `max_overlap` (default 10%) of an eval answer's 5-gram shingles is dropped,
-   measured **in both directions**. Shingles are weighted by inverse document
-   frequency, so shared boilerplate ("is defined as") does not count as
-   leakage - only distinctive content does.
-3. **Final cleanup** - any eval row still overlapping is dropped
+   measured **in both directions** and against the single row it actually
+   conflicts with. Shingles are weighted by inverse document frequency, so
+   shared boilerplate ("is defined as") does not count as leakage - only
+   distinctive content does. A shingle present in *every* answer carries
+   exactly zero weight.
+3. **Final cleanup** - a leak is always resolved by dropping the **train** row,
+   never the eval row. The train set is abundant and the eval set is scarce;
+   dropping an eval row loses the only copy of that material, and if it is the
+   last document of a subject, that subject disappears from the eval set
 4. **Subject balancing** - per-subject caps, applied after the split
 
-Always read the printed `max eval/train answer overlap` line. It must be `<= max-overlap`.
+Always read the printed `max eval/train answer overlap` line. It must be `<= max-overlap`, and
+`validate.py` must print the same number - the two measure leakage identically, so a
+disagreement means a bug rather than a dataset problem.
 
 ### 6. Validate and report
 
@@ -172,6 +181,31 @@ answer adds almost no new information beyond the question). Exits non-zero on an
 
 `report.py` writes a markdown quality report: subject balance, atom-kind mix, question diversity,
 source coverage, length profile and split health.
+
+### 7. Check that answers are grounded
+
+```bash
+python scripts/ground.py --output ./dataset
+```
+
+An answer the source does not support is a fabrication, and a fabrication teaches the model to
+invent. `ground.py` scores every row by what share of the answer's distinctive content words
+actually appear in the text it was extracted from, and reports the result per row, per subject
+and as a histogram.
+
+Two numbers are reported. **Own-document grounding** is the strict one: the answer must be
+supported by the document it is attributed to. **Any-corpus grounding** is the weaker fallback -
+a fact restated in another book is still grounded, it just is not attributable to this document.
+
+Grounding is scored, not enforced, because a hard threshold depends on the corpus: a textbook
+restates its own phrasing, so a genuinely-grounded answer can still score low when the PDF
+extraction was lossy. To drop the weakest rows:
+
+```bash
+python scripts/ground.py --output ./dataset --drop-below 0.55 --write-grounded
+```
+
+This writes `train_grounded.jsonl` and `eval_grounded.jsonl` alongside the originals.
 
 ## Advanced Options
 
@@ -232,13 +266,19 @@ It needs `scripts/cdp.py` next to it and a Chrome started with `--remote-debuggi
 ## Testing
 
 ```bash
-python -m unittest discover -s tests -p 'test_*.py' -v
+python scripts/check.py            # pytest if available, else unittest
 ```
 
-54 tests cover the full pipeline over a synthetic corpus (BOM, CRLF, unicode, corrupt files,
+71 tests cover the full pipeline over a synthetic corpus (BOM, CRLF, unicode, corrupt files,
 near-duplicate documents, single-document corpus, every missing-input path), the LLM backend
 against a mock server, DOCX/Markdown input, block-aware PDF extraction, config validation,
 subject-stratified splitting, and determinism.
+
+`tests/test_regressions.py` pins down the specific defects that were found and fixed, so they
+cannot come back: prefix precedence and detection pools, the IDF weight of universal
+boilerplate, symmetric overlap, rows that vanish from both splits, a subject losing its only
+document, the splitter and the validator reporting different overlap numbers, provenance, and
+the grounding score.
 
 ## Troubleshooting
 

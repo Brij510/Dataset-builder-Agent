@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end + unit tests for the instruction-dataset-builder pipeline.
+"""End-to-end + unit tests for the dataset-builder pipeline.
 
 Run:  python tests/test_pipeline.py
 Exits non-zero on the first failure summary.
@@ -142,7 +142,7 @@ class PipelineE2E(unittest.TestCase):
             jl = [json.loads(l) for l in open(os.path.join(self.out, f"{split}.jsonl")) if l.strip()]
             with open(os.path.join(self.out, f"{split}.csv"), encoding="utf-8") as f:
                 rows = list(csvmod.reader(f))
-            self.assertEqual(rows[0], ["instruction", "input", "output", "subject"])
+            self.assertEqual(rows[0], ["instruction", "input", "output", "subject", "source"])
             self.assertEqual(len(rows) - 1, len(jl), f"{split} csv/jsonl mismatch")
             for o in jl:
                 t = o["text"]
@@ -152,19 +152,31 @@ class PipelineE2E(unittest.TestCase):
                 self.assertIn("<|im_start|>assistant", t)
 
     def test_10_no_leakage(self):
-        from common import shingles
+        from common import (build_idf, build_overlap_index, max_overlap,
+                            shingles)
         train = [json.loads(l) for l in open(os.path.join(self.out, "train.jsonl")) if l.strip()]
         ev = [json.loads(l) for l in open(os.path.join(self.out, "eval.jsonl")) if l.strip()]
         tri = {r["instruction"].lower().strip() for r in train}
         for r in ev:
             self.assertNotIn(r["instruction"].lower().strip(), tri)
-        tr = set()
-        for r in train:
-            tr |= shingles(r["output"])
+        # the same symmetric, IDF-weighted, per-row measure the splitter uses
+        tr_sh = [shingles(r["output"]) for r in train]
+        inv = build_overlap_index(tr_sh)
+        idf = build_idf([r["output"] for r in train + ev], 5)
         for r in ev:
             s = shingles(r["output"])
             if s:
-                self.assertLessEqual(len(s & tr) / len(s), 0.10)
+                self.assertLessEqual(
+                    max_overlap(s, inv, tr_sh, idf, symmetric=True)[0], 0.10)
+
+    def test_11_rows_keep_their_source(self):
+        """Every row must point back at the document it came from."""
+        for split in ("train", "eval"):
+            jl = [json.loads(l) for l in
+                  open(os.path.join(self.out, f"{split}.jsonl"), encoding="utf-8") if l.strip()]
+            self.assertTrue(jl, f"{split} is empty")
+            for r in jl:
+                self.assertTrue(r.get("source"), f"{split} row lost its source pointer")
 
 
 class MaxPerAnswer(unittest.TestCase):

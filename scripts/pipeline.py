@@ -47,27 +47,29 @@ def main():
     os.makedirs(args.output, exist_ok=True)
     cfg_arg = ["--config", args.config] if args.config else []
 
-    run("1/6 extract", "extract.py",
+    run("1/7 extract", "extract.py",
         ["--input", args.input, "--output", args.output,
          "--pages", str(args.pages), "--workers", str(args.workers)] + cfg_arg)
 
     if not args.skip_dedupe:
-        run("2/6 dedupe", "dedupe.py",
+        run("2/7 dedupe", "dedupe.py",
             ["--output", args.output] + cfg_arg)
 
-    run("3/6 atoms", "atoms.py",
+    run("3/7 atoms", "atoms.py",
         ["--output", args.output] + cfg_arg +
         (["--subjects", args.subjects] if args.subjects else []))
 
-    run("4/6 qa", "qa.py",
+    run("4/7 qa", "qa.py",
         ["--output", args.output, "--target", str(args.target)] + cfg_arg +
         (["--llm"] if args.llm else []))
 
-    run("5/6 assemble", "assemble.py",
+    run("5/7 assemble", "assemble.py",
         ["--output", args.output, "--eval-frac", str(args.eval_frac)] + cfg_arg)
 
     if not args.skip_validate:
-        run("6/6 validate", "validate.py", ["--output", args.output] + cfg_arg)
+        run("6/7 validate", "validate.py", ["--output", args.output] + cfg_arg)
+
+    run("7/7 ground", "ground.py", ["--output", args.output] + cfg_arg)
 
     print("\n[pipeline] complete")
     print(f"  {os.path.join(args.output, 'train.jsonl')}")

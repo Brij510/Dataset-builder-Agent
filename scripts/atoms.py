@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (read_json, write_jsonl, load_config, subject_for,  # noqa: E402
-                    summarize_counts, unwrap, detect_subject)
+                    summarize_counts, unwrap, detect_subject, SUBJECT_KEYWORDS)
 
 DEF_RE = re.compile(
     r"^([A-Z][A-Za-z0-9 ,\-\(\)\/\.']{2,55}?)\s+"
@@ -31,6 +31,23 @@ BAD_CONCEPT = re.compile(
     r"mine|myself|your|our|their|from|with|without|on|at|by|under|over|"
     r"through|during|after|before|between|above|below|into|onto|per|via|"
     r"given|following|above given|the same|all the|any of|one of)\b", re.I)
+
+# A concept that opens with a quantifier or an indefinite pronoun is the
+# subject of a sentence, not a term: "Many of our cities", "Some such
+# examples", "One major objective of the Agenda 21". Turned into a question
+# these read as nonsense - "What is Many of our cities?" - so they are
+# rejected and the sentence falls through to another atom kind.
+BAD_CONCEPT_HEAD = re.compile(
+    r"^(many|some|most|all|each|every|none|no|other|others|another|several|"
+    r"few|both|either|neither|such|one|two|three|four|five|six|seven|eight|"
+    r"nine|ten|various|several|many of|some of|most of|none of)\b", re.I)
+
+# A concept that ends in a preposition or a conjunction is a truncated
+# phrase, not a term.
+BAD_CONCEPT_TAIL = re.compile(
+    r"\b(of|in|on|at|to|for|with|from|by|and|or|but|that|which|who|whose|"
+    r"than|as|into|onto|about|over|under|between|during|through|is|are|was|"
+    r"were|has|have|had|can|will|would|should|may|might|must)\s*$", re.I)
 
 # a concept containing a clause boundary is a fragment, not a term
 BAD_CONCEPT_CLAUSE = re.compile(
@@ -143,6 +160,8 @@ def classify(sent, cfg):
         if (1 <= len(concept.split()) <= 7 and len(stmt) > 25
                 and not BAD_CONCEPT.match(concept)
                 and not BAD_CONCEPT_CLAUSE.search(concept)
+                and not BAD_CONCEPT_HEAD.match(concept)
+                and not BAD_CONCEPT_TAIL.search(concept)
                 and sum(c.isalpha() for c in concept) / max(len(concept), 1) > 0.75):
             return "definition", concept, stmt
 
@@ -205,13 +224,20 @@ def main():
 
     a = cfg["atoms"]
     auto_detect = cfg.get("auto_subject", True)
-    known = cfg.get("subjects") or None
+    # The candidate pool for content-based detection. `subjects` is a list of
+    # labels, so it is the right pool; it must not be the default label alone,
+    # because then nothing could ever be detected.
+    known = [s for s in (cfg.get("subjects") or []) if s and s != default_subject] or None
+    if known is None:
+        known = list(SUBJECT_KEYWORDS)
     atoms = []
     for rel, text in sorted(corpus.items()):
         if not text:
             continue
         subj = subject_for(rel, subject_map, default_subject)
-        if subj == default_subject and auto_detect and len(subject_map) == 0:
+        # A path prefix is authoritative; detection only fills the gaps left by
+        # an unmatched prefix, so it runs whether or not a map was configured.
+        if subj == default_subject and auto_detect:
             subj = detect_subject(text, known, default_subject,
                                   extra_keywords=cfg.get("subject_keywords"))
         text = unwrap(text)

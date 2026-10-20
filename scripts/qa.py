@@ -159,6 +159,13 @@ def topic_of(sentence):
                              "who", "when", "where", "why", "how", "now", "can",
                              "do", "does", "did", "is", "are", "in", "fact"):
             return False
+        # A phrase opening with a quantifier is the subject of a sentence,
+        # not a topic: "Many of our cities" -> "What is Many of our cities?"
+        if ws[0].lower() in ("many", "some", "most", "all", "each", "every",
+                             "none", "no", "other", "others", "another",
+                             "several", "few", "both", "either", "neither",
+                             "such", "various", "one", "two", "three"):
+            return False
         if joined.lower().startswith(("can you", "do you", "did you", "what is",
                                       "what are", "how do", "how can", "why do")):
             return False

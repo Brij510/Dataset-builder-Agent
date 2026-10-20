@@ -18,7 +18,8 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (build_idf, load_config, read_jsonl, shingles,  # noqa: E402
+from common import (build_idf, build_overlap_index, load_config,  # noqa: E402
+                    max_overlap, read_jsonl, shingles, symmetric_overlap,
                     weighted_overlap)
 
 WATERMARK = re.compile(r"prashant\s*kirad|shobhit\s*nirwan|created with|"
@@ -70,7 +71,9 @@ def main():
         if os.path.exists(cp):
             with open(cp, encoding="utf-8") as f:
                 cr = list(csv.reader(f))
-            if cr and cr[0] != ["instruction", "input", "output", "subject"]:
+            # the first four columns are the contract; "source" is optional so
+            # a dataset written by an older build still validates
+            if cr and cr[0][:4] != ["instruction", "input", "output", "subject"]:
                 errors.append(f"{split}: unexpected CSV header {cr[0] if cr else None}")
             if len(cr) - 1 != len(rows):
                 errors.append(f"{split}: CSV has {len(cr)-1} rows, JSONL has {len(rows)}")
@@ -86,16 +89,17 @@ def main():
         if shared:
             errors.append(f"eval instructions also present in train: {shared}")
 
-        tr_sh = set()
-        for r in tr:
-            tr_sh |= shingles(r.get("output") or "", n)
-        # the same IDF-weighted measure assemble.py uses, so the two agree
+        # The same IDF-weighted, symmetric, per-row measure assemble.py uses,
+        # so the two agree. A union of all train shingles would overstate
+        # overlap and disagree with the splitter.
+        tr_sh_list = [shingles(r.get("output") or "", n) for r in tr]
+        tr_inv = build_overlap_index(tr_sh_list)
         idf = build_idf([r.get("output") or "" for r in tr + ev], n)
         worst, bad = 0.0, 0
         for r in ev:
             s = shingles(r.get("output") or "", n)
             if s:
-                ov = weighted_overlap(s, tr_sh, idf)
+                ov = max_overlap(s, tr_inv, tr_sh_list, idf, symmetric=True)[0]
                 worst = max(worst, ov)
                 if ov > limit:
                     bad += 1

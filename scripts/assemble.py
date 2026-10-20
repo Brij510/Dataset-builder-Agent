@@ -20,8 +20,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (build_idf, chatml, load_config, md5, norm_key,  # noqa: E402
-                    read_jsonl, shingles, summarize_counts, weighted_overlap,
+from common import (build_idf, build_overlap_index, chatml, load_config,  # noqa: E402
+                    md5, norm_key, max_overlap, read_jsonl, shingles,
+                    summarize_counts, symmetric_overlap, weighted_overlap,
                     write_jsonl)
 
 PRIORITY = {"gold": 0, "llm": 1, "atoms": 2, "v1": 3, "manual": 1}
@@ -45,9 +46,10 @@ def load_rows(path, default_origin):
 def write_csv(path, rows):
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["instruction", "input", "output", "subject"])
+        w.writerow(["instruction", "input", "output", "subject", "source"])
         for r in rows:
-            w.writerow([r["instruction"], "", r["output"], r["subject"]])
+            w.writerow([r["instruction"], "", r["output"], r["subject"],
+                        r.get("source", "")])
 
 
 def write_jsonl_chat(path, rows):
@@ -57,6 +59,11 @@ def write_jsonl_chat(path, rows):
                "instruction": r["instruction"], "input": "", "output": r["output"]}
         if r.get("kind"):
             rec["kind"] = r["kind"]
+        # provenance: every row must point back at the document it came from
+        if r.get("source"):
+            rec["source"] = r["source"]
+        if r.get("origin"):
+            rec["origin"] = r["origin"]
         out.append(rec)
     write_jsonl(path, out)
 
@@ -207,30 +214,30 @@ def main():
 
     # ---- symmetric overlap filter between train candidates and eval.
     # Weighted by IDF so shared boilerplate does not count as leakage - only
-    # distinctive content does.
-    idf = build_idf([r["output"] for r in merged], n)
-    eval_sh = [shingles(r["output"], n) for r in eval_rows]
-    eval_inv = collections.defaultdict(list)
-    for ei, s in enumerate(eval_sh):
-        for g in s:
-            eval_inv[g].append(ei)
-
-    def leaks(text, limit):
-        s = shingles(text, n)
-        if not s:
-            return False
-        for g in s:
-            for ei in eval_inv.get(g, ()):
-                if weighted_overlap(s, eval_sh[ei], idf) > limit:
-                    return True
-        return False
+    # distinctive content does. Measured in BOTH directions: a short train
+    # answer inside a long eval answer is a leak even though eval-to-train
+    # scores it near zero.
+    #
+    # The index is rebuilt from the CURRENT eval set every time it is
+    # consulted. Holding a stale index across a change to the eval set makes
+    # the filter judge rows against material that is no longer in eval, which
+    # silently drops rows that belong in neither split.
+    def eval_index():
+        sh = [shingles(r["output"], n) for r in eval_rows]
+        return sh, build_overlap_index(sh), build_idf(
+            [r["output"] for r in eval_rows + merged], n)
 
     def build_train(limit):
+        """Train rows that do not leak into the current eval set."""
+        ev_sh, ev_inv, idf = eval_index()
         rows, dropped = [], 0
         for r in merged:
+            if id(r) in eval_ids:
+                continue           # this row IS in eval
             if r["source"] in used_sources:
-                continue       # whole held-out document stays out of train
-            if leaks(r["output"], limit):
+                continue           # whole held-out document stays out of train
+            s = shingles(r["output"], n)
+            if s and max_overlap(s, ev_inv, ev_sh, idf, symmetric=True)[0] > limit:
                 dropped += 1
                 continue
             rows.append(r)
@@ -260,14 +267,7 @@ def main():
         eval_ids = {id(r) for r in eval_rows}
         train_rows, dropped = [], 0
         for limit in (scfg["max_overlap"], scfg["max_overlap"] * 2, 1.0):
-            train_rows, dropped = [], 0
-            for r in merged:
-                if id(r) in eval_ids:
-                    continue
-                if leaks(r["output"], limit):
-                    dropped += 1
-                    continue
-                train_rows.append(r)
+            train_rows, dropped = build_train(limit)
             if len(train_rows) >= 0.2 * len(merged) or limit >= 1.0:
                 break
 
@@ -289,24 +289,19 @@ def main():
         for src in sorted(used_sources):
             if subject_of(by_src[src]) != sub:
                 continue
-            used_sources.discard(src)
             if len(eval_rows) - len(by_src[src]) < 1:
                 continue          # never hand back so much that eval empties
+            # remove the document from eval FIRST, then rebuild train against
+            # the new eval set - otherwise the handed-back rows are judged
+            # against themselves and end up in neither split
             for r in by_src[src]:
                 eval_ids.discard(id(r))
             eval_rows = [e for e in eval_rows
                          if e.get("source") != src]
-            # the handed-back rows belong to train again
+            used_sources.discard(src)
             train_rows, dropped = [], 0
             for limit in (scfg["max_overlap"], scfg["max_overlap"] * 2, 1.0):
-                train_rows, dropped = [], 0
-                for r in merged:
-                    if id(r) in eval_ids:
-                        continue
-                    if leaks(r["output"], limit):
-                        dropped += 1
-                        continue
-                    train_rows.append(r)
+                train_rows, dropped = build_train(limit)
                 if len(train_rows) >= 0.2 * len(merged) or limit >= 1.0:
                     break
             break
@@ -322,39 +317,93 @@ def main():
         train_rows += lst[:caps.get(s, 10 ** 9)]
     random.shuffle(train_rows)
 
-    # ---- final cleanup: drop any eval row still overlapping train.
+    # ---- final cleanup: remove the leaking TRAIN rows, never the eval rows.
+    #
+    # The train set is abundant and the eval set is scarce, so a leak is
+    # always resolved by dropping the train row. Dropping the eval row
+    # instead loses the only copy of that document's material, and when it
+    # happens to be the last document of a subject, that subject disappears
+    # from the eval set entirely.
+    #
     # The IDF basis is recomputed over the final train+eval sets so this
     # script and validate.py measure exactly the same thing.
     idf = build_idf([r.get("output") or "" for r in train_rows + eval_rows], n)
-    tr_sh = set()
+    ev_sh_list = [shingles(r.get("output") or "", n) for r in eval_rows]
+    ev_inv = build_overlap_index(ev_sh_list)
+
+    # Measured symmetrically, and against the row it actually conflicts with
+    # rather than the union of all eval shingles. The union overstates
+    # overlap: two eval rows that each share a different fragment with a
+    # train row can push the union measure over the limit even though no
+    # single eval row really duplicates it.
+    kept_train, dropped_final = [], 0
     for r in train_rows:
-        tr_sh |= shingles(r.get("output") or "", n)
-    keep = []
-    for r in eval_rows:
-        s = shingles(r["output"], n)
-        ov = weighted_overlap(s, tr_sh, idf) if s else 0.0
-        if ov <= scfg["max_overlap"]:
-            keep.append(r)
-    if len(keep) != len(eval_rows):
-        if not keep and eval_rows:
-            # never ship an empty eval set: keep the least-overlapping rows
-            scored = sorted(eval_rows,
-                            key=lambda r: weighted_overlap(
-                                shingles(r["output"], n), tr_sh, idf))
-            keep = scored[:max(1, len(eval_rows) // 4)]
-            print(f"[assemble] every eval row overlapped train; kept the "
-                  f"{len(keep)} least-overlapping rows")
+        s = shingles(r.get("output") or "", n)
+        if not s:
+            kept_train.append(r)
+            continue
+        worst, _ = max_overlap(s, ev_inv, ev_sh_list, idf, symmetric=True)
+        if worst <= scfg["max_overlap"]:
+            kept_train.append(r)
         else:
-            print(f"[assemble] dropped {len(eval_rows) - len(keep)} leaky eval rows")
-    eval_rows = keep
+            dropped_final += 1
+    if dropped_final:
+        print(f"[assemble] dropped {dropped_final} train rows that still "
+              f"overlapped the eval set")
+    train_rows = kept_train
+
+    # ---- safety net: no row may vanish silently.
+    #
+    # Every stage above can drop a row for a good reason, but a row that ends
+    # up in NEITHER split is data loss the user never asked for and cannot
+    # see. Such a row is offered back to train - but it must clear the same
+    # leak filter as every other train row, or returning it would undo the
+    # guarantee this script just made. A row that cannot clear the filter is
+    # genuinely a duplicate of eval material, so it is reported and dropped.
+    in_train = {id(r) for r in train_rows}
+    in_eval = {id(r) for r in eval_rows}
+    orphans = [r for r in merged
+               if id(r) not in in_train and id(r) not in in_eval]
+    if orphans:
+        restored, conflicting = [], 0
+        for r in orphans:
+            s = shingles(r["output"], n)
+            if s and max_overlap(s, ev_inv, ev_sh_list, idf,
+                                 symmetric=True)[0] > scfg["max_overlap"]:
+                conflicting += 1
+                continue
+            restored.append(r)
+        if restored:
+            train_rows += restored
+            random.shuffle(train_rows)
+        print(f"[assemble] {len(orphans)} row(s) matched neither split; "
+              f"returned {len(restored)} to train"
+              + (f", dropped {conflicting} that duplicate eval material"
+                 if conflicting else ""),
+              file=sys.stderr)
+
+    # Recompute against the final train rows and report the true number.
+    idf = build_idf([r.get("output") or "" for r in train_rows + eval_rows], n)
+    tr_sh_list = [shingles(r.get("output") or "", n) for r in train_rows]
+    tr_inv = build_overlap_index(tr_sh_list)
 
     worst = 0.0
     for r in eval_rows:
         s = shingles(r["output"], n)
         if s:
-            worst = max(worst, weighted_overlap(s, tr_sh, idf))
+            worst = max(worst, max_overlap(s, tr_inv, tr_sh_list, idf,
+                                           symmetric=True)[0])
     print(f"[assemble] max eval/train answer overlap: {worst:.3f} "
           f"(limit {scfg['max_overlap']})")
+    if worst > scfg["max_overlap"]:
+        # Every candidate train row conflicted with some eval row. The eval
+        # set is what the user needs, so keep it and say plainly that the
+        # corpus cannot be split at this limit.
+        print(f"[assemble] WARNING: no train row can be separated from the "
+              f"eval set at max_overlap={scfg['max_overlap']}. The corpus "
+              f"restates the same facts across documents; lower "
+              f"split.max_overlap, or hold out more source documents.",
+              file=sys.stderr)
     print(f"[assemble] TRAIN {len(train_rows)} {summarize_counts(train_rows)}")
     print(f"[assemble] EVAL  {len(eval_rows)} {summarize_counts(eval_rows)}")
 

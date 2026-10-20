@@ -30,7 +30,7 @@ jobs:
           python -m compileall -q scripts/ tests/
 
       - name: Run test suite
-        run: python -m unittest discover -s tests -p 'test_*.py' -v
+        run: python scripts/check.py
 
       - name: Smoke test the pipeline end to end
         run: |

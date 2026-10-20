@@ -3,10 +3,10 @@
 Why the pipeline is shaped the way it is. Each decision below was forced by a
 measured failure, not by preference.
 
-## The pipeline is six stages, not one
+## The pipeline is seven stages, not one
 
 ```
-raw docs -> extract -> dedupe -> atoms -> qa -> split -> validate
+raw docs -> extract -> dedupe -> atoms -> qa -> split -> validate -> ground
 ```
 
 Splitting it this way buys three things:
@@ -138,9 +138,75 @@ actual content is different.
 
 The filter is therefore IDF-weighted: each shingle is weighted by how rare it
 is across the corpus, and only distinctive content can push the overlap over
-the limit. On a 66-document NCERT slice this moved the reported overlap from
-0.080 (raw) to 0.041 (weighted) - the difference was boilerplate, not
-leakage.
+the limit.
+
+### The IDF floor must reach zero
+
+The first implementation used `log(N / df) + 1`. That "+1" is fatal. A shingle
+present in *every* answer still carries a full unit of weight, and a 5-gram
+window over a shared template produces many such shingles. In a 144-row
+synthetic corpus, 12 of the 16 shingles shared by two unrelated answers had
+document frequency 144 - they were pure phrasing - and the measure reported
+0.17 overlap between two answers that share no content at all.
+
+Switching to the smooth form `log((N+1) / (df+1))` gives a universally common
+shingle a weight of exactly **zero**, so boilerplate cannot contribute to the
+numerator or the denominator. The same pair then scored 0.016, and genuinely
+similar answers still scored above 0.10. A shingle that appears in every
+answer proves nothing, so it must be worth nothing.
+
+The fallback matters too: when a row's shingles are *all* universal, the
+IDF-weighted denominator is zero. Reporting 0.0 there would hide a genuine
+duplicate behind a corpus made entirely of boilerplate, so the raw shingle
+ratio is used instead.
+
+## Leakage is measured in both directions, against one row
+
+A one-directional measure misses leaks. A short train answer sitting inside a
+long eval answer scores near 1.0 measured train-to-eval, but near 0.0
+measured eval-to-train. The measure is now the **worse** of the two
+directions.
+
+The comparison is also made against the single row that actually conflicts,
+not against the union of all train shingles. The union overstates overlap:
+two train rows that each share a different fragment with an eval row can push
+the union measure over the limit even though no single train row really
+duplicates it.
+
+## A leak is resolved by dropping the train row
+
+The train set is abundant and the eval set is scarce. When a train row and an
+eval row conflict, the train row is dropped. Dropping the eval row instead
+loses the only copy of that document's material, and when it is the last
+document of a subject, that subject disappears from the eval set entirely.
+
+The earlier implementation did the opposite - it dropped eval rows to satisfy
+the limit, and then handed back documents whose subjects had vanished from
+training. The result was a dataset that `assemble.py` reported as
+`max eval/train answer overlap: 0.192 (limit 0.1)` while `validate.py`
+rejected the same files with "9 eval rows exceed the overlap limit". The two
+scripts measured the same thing differently and disagreed.
+
+Both scripts now share one implementation (`common.symmetric_overlap`,
+`common.max_overlap`) and one IDF basis, so they cannot disagree. A
+regression test asserts that the number `assemble.py` prints is the number
+`validate.py` prints, and that the validator accepts what the splitter
+shipped.
+
+## A document must never vanish from both splits
+
+When a subject's only document was held out for eval, the hand-back logic
+removed it from eval - but the leak index had been built before that
+removal, so the handed-back rows were still judged against their own stale
+index entries and dropped from train as well. The document ended up in
+neither split, and the subject disappeared from the dataset entirely. The
+index is now rebuilt from the current eval set every time it is consulted.
+
+A safety net catches any row that still matches neither split. It is offered
+back to train, but it must clear the same leak filter as every other train
+row - returning a row that duplicates eval material would undo the guarantee
+the script just made. A row that cannot clear the filter is a genuine
+duplicate and is reported and dropped.
 
 ## The eval set is subject-stratified
 
@@ -186,6 +252,34 @@ scoring over document content gives sensible labels with no configuration, and
 `subject_map` still wins when present. `subject_keywords` in the config adds
 your own labels without editing the code.
 
+### The detection pool must contain real labels
+
+The detector scores each candidate label from a pool and returns the best one
+above a threshold. If the pool contains only the default label, the detector
+can never return anything else - it is not "no match", it is "no candidate".
+
+The pool is built from the config's `subjects` list, with the default label
+removed, falling back to the built-in table when that list is empty or
+unusable. Detection also used to be skipped entirely whenever a `subject_map`
+was configured, which meant a corpus with a *partial* map got `General` for
+everything the map did not cover. A path prefix is authoritative; detection
+fills the gaps left by an unmatched prefix, so it runs either way.
+
+On the 66-document NCERT slice this moved the atom mix from
+`{'General': 538}` to `{'Math': 229, 'Social Science': 237, 'Economics': 34,
+'Science': 33}`.
+
+### The most specific path prefix wins
+
+`subject_map` used to be scanned in dictionary order and the first prefix
+found won, so `{"Math/": "Math", "Math/NCERT/": "Math Advanced"}` classified
+everything under `Math/NCERT/` as plain `Math`. The longest matching prefix
+wins now.
+
+The match is also anchored to a path boundary. A bare `Math` prefix must not
+match `AppliedMathematics/x.pdf`, which is a different subject entirely.
+Prefixes that already end in `/` are unambiguous and need no boundary check.
+
 ## Determinism
 
 The same input tree produces byte-identical `train.jsonl` and `eval.jsonl` on
@@ -212,9 +306,42 @@ pass while the other fails, and the disagreement looks like a bug in the
 dataset rather than in the tooling. Both now:
 
 - weight shingles by IDF over the same basis (the final train+eval sets)
+- measure symmetrically, against the single row that actually conflicts
 - use the same `max_overlap` limit
 
-so `max eval/train answer overlap` means the same number in both.
+so `max eval/train answer overlap` means the same number in both. A
+regression test asserts the two numbers are equal.
+
+## Every row keeps its source
+
+A row that cannot be traced back to the document it came from cannot be
+audited, cannot be corrected, and cannot be removed when a source turns out
+to be wrong. The `source` field was dropped when the final rows were written,
+even though the split logic depended on it - the pointer was there and then
+gone by the time it reached the file.
+
+Rows now carry `source` and `origin` into `train.jsonl` / `eval.jsonl`, and
+the CSV gained a matching `source` column. The validator treats a missing
+source as a failure.
+
+## Grounding is measured, not assumed
+
+The pipeline never writes an answer that is not in the extracted text, so
+every answer is grounded by construction. That is a guarantee about the
+*code*, not about the *data*: a lossy PDF extraction can produce an answer
+that reads as gibberish, and a hand-written `gold.jsonl` can contain
+anything.
+
+`ground.py` checks it independently, scoring every row by the share of its
+content words that actually appear in the text it was extracted from. It
+scores against the row's own document strictly, and against the whole corpus
+as a weaker fallback - a fact restated in another book is still grounded, it
+just is not attributable to this document.
+
+Scoring rather than enforcing is deliberate. A hard threshold depends on the
+corpus: a textbook restates its own phrasing, so a genuinely-grounded answer
+can still score low when the extraction was lossy. The score is reported, and
+`--drop-below` removes the weakest rows when the user wants a clean set.
 
 ## Quality gates
 
@@ -228,7 +355,9 @@ use.
 
 ## What is deliberately not here
 
-- **No OCR.** Scanned PDFs produce no text. Run `ocrmypdf` first.
+- **No OCR.** Scanned PDFs produce no text. Run `ocrmypdf` first. The
+  extractor reports which documents yielded no usable text, because a silently
+  skipped chapter is a silently missing chapter.
 - **No LLM-written answers.** The LLM backend may rewrite questions; answers
   always come from the extracted text. This is what keeps the dataset grounded.
 - **No synthetic templates per domain.** The archetype set is generic. A

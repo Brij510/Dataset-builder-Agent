@@ -1,4 +1,4 @@
-"""Shared utilities for the instruction-dataset-builder pipeline."""
+"""Shared utilities for the dataset-builder pipeline."""
 import collections
 import hashlib
 import json
@@ -120,6 +120,9 @@ ARTIFACT_PATTERNS = [
     r"\.\s*\.\s*", r"\(\s*\)", r"\bTable\s+\d+", r"^\s*Fig(ure)?\.?\s*\d+",
     r"\bEx\.\s*\d+[a-z]?\b", r"\bQ\.\s*\d+", r"\bAns\.?\s*\d+",
     r"[\uFFFD]+", r"\s+[|/\\]\s+",
+    # answer-key section headers that survive extraction and end up in a
+    # question: "State the relation: ANSWERS/HINTS 251 (ii) ..."
+    r"\bANSWERS?\s*/\s*HINTS?\b\s*\d*", r"^\s*HINTS?\s+\d+\s*",
 ]
 
 
@@ -275,6 +278,13 @@ def build_idf(texts, n=5):
     not count as leakage - only distinctive content should. IDF weighting does
     exactly that: a shingle that appears in one document weighs far more than
     one that appears in every document.
+
+    The smooth form `log((N+1)/(df+1))` is used rather than `log(N/df)+1`
+    because the latter never reaches zero. A shingle present in every answer
+    still carries a full unit of weight, and since a 5-gram window over a
+    shared template produces many such shingles, the boilerplate outweighs
+    the distinctive content and the measure reports leakage where there is
+    none. Here a universally common shingle weighs exactly nothing.
     """
     df = collections.Counter()
     n_docs = 0
@@ -283,16 +293,74 @@ def build_idf(texts, n=5):
         df.update(set(shingles(t or "", n)))
     if not n_docs:
         return {}
-    return {g: math.log(n_docs / (1 + c)) + 1.0 for g, c in df.items()}
+    return {g: math.log((n_docs + 1) / (c + 1)) for g, c in df.items()}
 
 
 def weighted_overlap(a_sh, b_sh, idf):
-    """Fraction of a_sh's IDF weight that also appears in b_sh."""
+    """Fraction of a_sh's IDF weight that also appears in b_sh.
+
+    Falls back to the raw shingle ratio when a_sh carries no distinctive
+    weight at all. Reporting zero there would hide a genuine duplicate
+    behind a corpus made entirely of boilerplate.
+    """
     if not a_sh:
         return 0.0
-    num = sum(idf.get(g, 1.0) for g in (a_sh & b_sh))
-    den = sum(idf.get(g, 1.0) for g in a_sh)
-    return num / den if den else 0.0
+    num = sum(idf.get(g, 0.0) for g in (a_sh & b_sh))
+    den = sum(idf.get(g, 0.0) for g in a_sh)
+    if den:
+        return num / den
+    shared = len(a_sh & b_sh)
+    return shared / len(a_sh) if a_sh else 0.0
+
+
+def symmetric_overlap(a_sh, b_sh, idf):
+    """Overlap between two shingle sets, measured in both directions.
+
+    One direction is not enough. A short train answer sitting inside a long
+    eval answer scores near 1.0 when measured train-to-eval, but near 0.0
+    when measured eval-to-train. A leak that only shows up in one direction
+    is still a leak, so the worse of the two is the number that counts.
+    """
+    return max(weighted_overlap(a_sh, b_sh, idf),
+               weighted_overlap(b_sh, a_sh, idf))
+
+
+def build_overlap_index(row_shingles):
+    """Invert shingle -> rows, so overlap is checked only against candidates.
+
+    Comparing every row against every other row is quadratic. A row can only
+    share a shingle with a row that actually contains that shingle, so the
+    inverted index turns the search into a lookup over the few real
+    candidates.
+    """
+    index = collections.defaultdict(list)
+    for i, sh in enumerate(row_shingles):
+        for g in sh:
+            index[g].append(i)
+    return index
+
+
+def max_overlap(a_sh, index, row_shingles, idf, symmetric=True):
+    """Highest overlap between a_sh and any indexed row.
+
+    Returns (worst_overlap, other_shingles) so the caller can drop the
+    offending row.
+    """
+    if not a_sh:
+        return 0.0, set()
+    seen = set()
+    worst, other = 0.0, set()
+    for g in a_sh:
+        for i in index.get(g, ()):
+            if i in seen:
+                continue
+            seen.add(i)
+            b_sh = row_shingles[i]
+            ov = (symmetric_overlap(a_sh, b_sh, idf) if symmetric
+                  else weighted_overlap(a_sh, b_sh, idf))
+            if ov > worst:
+                worst, other = ov, b_sh
+    return worst, other
 
 
 # --------------------------------------------------------------------- io
@@ -407,6 +475,10 @@ def detect_subject(text, known=None, default="General", min_hits=3, extra_keywor
     Used when no explicit subject_map entry matches. Only a label from
     `known` (or the built-in table) can be returned. `extra_keywords` lets a
     config file add its own labels without editing this module.
+
+    `known` narrows the candidate pool. Pass the labels you actually care
+    about; passing a pool that contains none of them (or only the default)
+    makes detection impossible, so the default is used for every document.
     """
     if not text:
         return default
@@ -428,11 +500,31 @@ def detect_subject(text, known=None, default="General", min_hits=3, extra_keywor
 
 
 def subject_for(rel_path, subject_map, default="General"):
+    """Resolve a document's subject from its path.
+
+    The most specific prefix wins, so {"Math/": "Math", "Math/NCERT/": "Math
+    Advanced"} maps a file under Math/NCERT/ to "Math Advanced" and never to
+    "Math". A prefix only matches at a path boundary - "Math" must not match
+    "AppliedMathematics" - and the longest match wins, not the dict order.
+    """
+    rel = (rel_path or "").replace("\\", "/")
+    best_len, best = -1, default
     for prefix, subj in (subject_map or {}).items():
-        if rel_path.startswith(prefix) or prefix.lower() in rel_path.lower():
-            return subj
-    top = rel_path.replace("\\", "/").split("/")[0]
-    return subject_map.get(top, default)
+        p = prefix.replace("\\", "/")
+        if not p:
+            continue
+        if not rel.startswith(p):
+            continue
+        if not p.endswith("/") and len(rel) > len(p) and rel[len(p)] != "/":
+            # "Math" must not match "Mathematics"; a prefix that already ends
+            # in "/" is unambiguous and needs no boundary check
+            continue
+        if len(p) > best_len:
+            best_len, best = len(p), subj
+    if best_len >= 0:
+        return best
+    top = rel.split("/")[0]
+    return (subject_map or {}).get(top, default)
 
 
 def summarize_counts(rows, key="subject"):
