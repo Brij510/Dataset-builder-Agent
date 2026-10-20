@@ -82,8 +82,11 @@ A textbook and its scan carry the same content under different paths. Two conseq
 2. Worse, the document-holdout split becomes dishonest: the model sees the same material in
    both halves even though the files differ.
 
-`dedupe.py` compares every pair of documents by 5-gram shingle overlap and drops the later
-copy of any pair above 60% overlap. It rewrites `corpus.json` in place and keeps
+`dedupe.py` compares every pair of documents by Jaccard similarity over 5-gram shingles and
+drops the later copy of any pair above 75% overlap. Jaccard, not containment: containment
+flags any two documents that share boilerplate (a 794-document corpus produced 2,372 false
+pairs that way, versus 148 true duplicates with Jaccard). Documents under 500 characters or
+with fewer than 30 distinct shingles are excluded from comparison. It rewrites `corpus.json` in place and keeps
 `corpus.json.pre-dedupe` as a backup. `assemble.py` runs the same check at row level as a
 safety net for corpora that skipped stage 2.
 
@@ -166,7 +169,8 @@ The split is the part most pipelines get wrong. This implementation:
 
 1. holds out **whole source documents** for eval - the strongest guarantee that
    the model has not memorised the material
-2. computes 5-gram shingles of every answer
+2. computes 5-gram shingles of every answer, weighted by inverse document frequency so
+   that boilerplate shared across the corpus cannot by itself trigger the limit
 3. drops any train row whose answer shares more than `max_overlap` (default
    10%) of shingles with any eval answer, measured **in both directions** so
    that a long eval answer and a short train answer cannot slip through

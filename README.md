@@ -11,8 +11,9 @@ raw docs -> extract -> dedupe -> atoms -> qa -> split -> validate
 
 - **Grounded** - every answer is text that was actually extracted from a source document, and
   every row keeps a `source` pointer.
-- **Leakage-controlled** - eval rows come from held-out *documents*; train rows that overlap eval
-  answers are removed with a symmetric 5-gram shingle check.
+- **Leakage-controlled** - eval rows come from held-out *documents*, stratified by subject so the
+  eval mix mirrors the training mix; train rows that overlap eval answers are removed with a
+  symmetric, IDF-weighted shingle check (boilerplate does not count as leakage).
 - **No echo rows** - questions ask *about* a topic instead of quoting the answer, so the model
   learns to elaborate rather than to repeat the prompt.
 - **Diverse** - 11 atom kinds and ~60 question archetypes selected round-robin.
@@ -21,7 +22,9 @@ raw docs -> extract -> dedupe -> atoms -> qa -> split -> validate
 - **Resumable** - extraction caches per file; every stage can be re-run safely.
 - **Fast** - process-pool extraction (threads do not work - pdfplumber is GIL-bound), shingle-based
   dedupe, deterministic splits.
-- **Tested** - 45 tests over a synthetic corpus, a mock LLM server, and every failure path.
+- **Block-aware** - textbook sidebars and two-column pages are reconstructed as blocks, so a
+  worked example is never spliced into the paragraph beside it.
+- **Tested** - 54 tests over a synthetic corpus, a mock LLM server, and every failure path.
 
 ## Install
 

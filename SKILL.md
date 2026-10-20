@@ -87,8 +87,10 @@ python scripts/dedupe.py --output ./dataset
 
 A textbook and its scan produce identical content. Left in place they waste generation effort and
 break the document-holdout split, because the model would see the same material in both halves
-even though the files differ. Detection uses 5-gram shingles over document text; the second copy
-of a >60% overlap pair is dropped. `corpus.json.pre-dedupe` keeps a backup.
+even though the files differ. Detection uses Jaccard similarity over 5-gram
+shingles (not containment, which flags any two documents that share
+boilerplate); the second copy of a >75% pair is dropped.
+`corpus.json.pre-dedupe` keeps a backup.
 
 ### 3. Mine knowledge atoms
 
@@ -143,9 +145,14 @@ python scripts/assemble.py --output ./dataset --eval-frac 0.07 --max-overlap 0.1
 
 Split strategy, in order of importance:
 
-1. **Source-document holdout** - eval rows come from whole documents the model never sees
-2. **Shingle overlap filter** - any train row sharing more than `max_overlap` (default 10%) of
-   5-gram answer shingles with an eval row is dropped, measured **in both directions**
+1. **Source-document holdout** - eval rows come from whole documents the model
+   never sees, with each subject given a quota proportional to its share of the
+   rows so the eval set mirrors the training mix
+2. **IDF-weighted shingle filter** - any train row sharing more than
+   `max_overlap` (default 10%) of an eval answer's 5-gram shingles is dropped,
+   measured **in both directions**. Shingles are weighted by inverse document
+   frequency, so shared boilerplate ("is defined as") does not count as
+   leakage - only distinctive content does.
 3. **Final cleanup** - any eval row still overlapping is dropped
 4. **Subject balancing** - per-subject caps, applied after the split
 
@@ -228,9 +235,10 @@ It needs `scripts/cdp.py` next to it and a Chrome started with `--remote-debuggi
 python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-45 tests cover the full pipeline over a synthetic corpus (BOM, CRLF, unicode, corrupt files,
+54 tests cover the full pipeline over a synthetic corpus (BOM, CRLF, unicode, corrupt files,
 near-duplicate documents, single-document corpus, every missing-input path), the LLM backend
-against a mock server, DOCX/Markdown input, config validation, and determinism.
+against a mock server, DOCX/Markdown input, block-aware PDF extraction, config validation,
+subject-stratified splitting, and determinism.
 
 ## Troubleshooting
 
